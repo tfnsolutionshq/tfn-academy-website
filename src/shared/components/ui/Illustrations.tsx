@@ -169,6 +169,142 @@ export function spaceSvg(v: number): string {
   return wall + s;
 }
 
+import ctaImg from '@/assets/optimized/cta.jpg';
+import hero1Img from '@/assets/optimized/hero1.jpg';
+import hero2Img from '@/assets/optimized/hero2.jpg';
+import kidsband1Img from '@/assets/optimized/kidsband1.jpg';
+import kidsband2Img from '@/assets/optimized/kidsband2.jpg';
+import who1Img from '@/assets/optimized/who1.jpg';
+import who2Img from '@/assets/optimized/who2.jpg';
+import who3Img from '@/assets/optimized/who3.jpg';
+import who4Img from '@/assets/optimized/who4.jpg';
+import who5Img from '@/assets/optimized/who5.jpg';
+import who6Img from '@/assets/optimized/who6.jpg';
+import whyImg from '@/assets/optimized/why.jpg';
+
+// Programme pages hero images
+import progFrontendImg from '@/assets/optimized/prog-frontend.jpg';
+import progBackendImg from '@/assets/optimized/prog-backend.jpg';
+import progFullstackImg from '@/assets/optimized/prog-fullstack.jpg';
+import progMobileImg from '@/assets/optimized/prog-mobile.jpg';
+import progCloudImg from '@/assets/optimized/prog-cloud.jpg';
+import progCyberImg from '@/assets/optimized/prog-cyber.jpg';
+import progNetworkImg from '@/assets/optimized/prog-network.jpg';
+import progItsupportImg from '@/assets/optimized/prog-itsupport.jpg';
+import progDataImg from '@/assets/optimized/prog-data.jpg';
+import progAiImg from '@/assets/optimized/prog-ai.jpg';
+import progMarketingImg from '@/assets/optimized/prog-marketing.jpg';
+import progSocialImg from '@/assets/optimized/prog-social.jpg';
+import progGraphicsImg from '@/assets/optimized/prog-graphics.jpg';
+import progVideoImg from '@/assets/optimized/prog-video.jpg';
+import progBrandingImg from '@/assets/optimized/prog-branding.jpg';
+import progBusinessImg from '@/assets/optimized/prog-business.jpg';
+import progProductImg from '@/assets/optimized/prog-product.jpg';
+import progProjectImg from '@/assets/optimized/prog-project.jpg';
+import progVaImg from '@/assets/optimized/prog-va.jpg';
+
+// Academy pages images
+import acadAboutImg from '@/assets/optimized/acad-about.jpg';
+import acadAbout2Img from '@/assets/optimized/acad-about2.jpg';
+import acadAboutHubImg from '@/assets/optimized/acad-about-hub.jpg';
+import acadAdmImg from '@/assets/optimized/acad-adm.jpg';
+import acadKids1Img from '@/assets/optimized/acad-kids1.jpg';
+import acadKids2Img from '@/assets/optimized/acad-kids2.jpg';
+import acadSch1Img from '@/assets/optimized/acad-sch1.jpg';
+import acadSch2Img from '@/assets/optimized/acad-sch2.jpg';
+import acadSchBandImg from '@/assets/optimized/acad-sch-band.jpg';
+import acadCareersImg from '@/assets/optimized/acad-careers.jpg';
+
+// Blog posts images
+import blogChooseSkillImg from '@/assets/optimized/blog-choose-skill.jpg';
+import blogProjectsImg from '@/assets/optimized/blog-projects.jpg';
+import blogDevopsImg from '@/assets/optimized/blog-devops.jpg';
+import blogMktgImg from '@/assets/optimized/blog-mktg.jpg';
+import blogStudyImg from '@/assets/optimized/blog-study.jpg';
+import blogVaImg from '@/assets/optimized/blog-va.jpg';
+import blogKidsImg from '@/assets/optimized/blog-kids.jpg';
+import blogCertsImg from '@/assets/optimized/blog-certs.jpg';
+
+// Corporate & Hire Talents images
+import corp1Img from '@/assets/optimized/corp1.jpg';
+import corp2Img from '@/assets/optimized/corp2.jpg';
+import corp3Img from '@/assets/optimized/corp3.jpg';
+import corpOnsiteImg from '@/assets/optimized/corp-onsite.jpg';
+import corpOnsite2Img from '@/assets/optimized/corp-onsite2.jpg';
+import corpOnlineImg from '@/assets/optimized/corp-online.jpg';
+import corpBandImg from '@/assets/optimized/corp-band.jpg';
+import hireImg from '@/assets/optimized/hire.jpg';
+
+const DEFAULT_SLOT_IMAGES: Record<string, string> = {
+  hero1: hero1Img,
+  hero2: hero2Img,
+  why: whyImg,
+  who1: who1Img,
+  who2: who2Img,
+  who3: who3Img,
+  who4: who4Img,
+  who5: who5Img,
+  who6: who6Img,
+  kidsband1: kidsband1Img,
+  kidsband2: kidsband2Img,
+  cta: ctaImg,
+
+  // Programme sub-pages: 'prog-' + slug
+  'prog-frontend': progFrontendImg,
+  'prog-backend': progBackendImg,
+  'prog-fullstack': progFullstackImg,
+  'prog-mobile': progMobileImg,
+  'prog-cloud': progCloudImg,
+  'prog-cyber': progCyberImg,
+  'prog-network': progNetworkImg,
+  'prog-itsupport': progItsupportImg,
+  'prog-data': progDataImg,
+  'prog-ai': progAiImg,
+  'prog-marketing': progMarketingImg,
+  'prog-social': progSocialImg,
+  'prog-graphics': progGraphicsImg,
+  'prog-video': progVideoImg,
+  'prog-branding': progBrandingImg,
+  'prog-business': progBusinessImg,
+  'prog-product': progProductImg,
+  'prog-project': progProjectImg,
+  'prog-va': progVaImg,
+
+  // Academy sub-pages
+  about: acadAboutImg,
+  about2: acadAbout2Img,
+  'about-hub': acadAboutHubImg,
+  adm: acadAdmImg,
+  kids1: acadKids1Img,
+  kids2: acadKids2Img,
+  sch1: acadSch1Img,
+  sch2: acadSch2Img,
+  'sch-band': acadSchBandImg,
+  careers: acadCareersImg,
+
+  // Blog posts
+  'blog-choose-your-first-tech-skill': blogChooseSkillImg,
+  'blog-beginner-projects-for-your-portfolio': blogProjectsImg,
+  'blog-what-does-a-devops-engineer-do': blogDevopsImg,
+  'blog-digital-marketing-skills-businesses-need': blogMktgImg,
+  'blog-learn-faster-studying-part-time': blogStudyImg,
+  'blog-start-as-a-virtual-assistant': blogVaImg,
+  'blog-why-kids-should-learn-digital-skills': blogKidsImg,
+  'blog-certifications-that-help-beginners': blogCertsImg,
+
+  // Corporate Training
+  corp1: corp1Img,
+  corp2: corp2Img,
+  corp3: corp3Img,
+  'corp-onsite': corpOnsiteImg,
+  'corp-onsite2': corpOnsite2Img,
+  'corp-online': corpOnlineImg,
+  'corp-band': corpBandImg,
+
+  // Hire Talents hero
+  hire: hireImg,
+};
+
 export function Photo({
   slot,
   idx,
@@ -179,11 +315,11 @@ export function Photo({
   className?: string;
 }) {
   const { photos, pickPhoto } = useSite();
-  const customSrc = photos[slot];
+  const effectiveSrc = photos[slot] || DEFAULT_SLOT_IMAGES[slot];
   return (
     <div className={`photo ${className}`.trim()} data-slot={slot}>
-      {customSrc ? (
-        <img src={customSrc} alt="Student photo" />
+      {effectiveSrc ? (
+        <img src={effectiveSrc} alt="Student photo" loading="lazy" />
       ) : (
         <div
           style={{ width: '100%', height: '100%', display: 'contents' }}
@@ -216,12 +352,12 @@ export function Scene({
   className?: string;
 }) {
   const { photos, pickPhoto } = useSite();
-  const customSrc = photos[slot];
+  const effectiveSrc = photos[slot] || DEFAULT_SLOT_IMAGES[slot];
   const fullSvg = `<svg viewBox="0 0 600 400" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Illustrated space placeholder">${spaceSvg(v)}</svg>`;
   return (
     <div className={`photo ${className}`.trim()} data-slot={slot}>
-      {customSrc ? (
-        <img src={customSrc} alt="Space photo" />
+      {effectiveSrc ? (
+        <img src={effectiveSrc} alt="Space photo" loading="lazy" />
       ) : (
         <div
           style={{ width: '100%', height: '100%', display: 'contents' }}
@@ -247,10 +383,14 @@ export function Scene({
 export function BlogCover({ post, extraClass = '' }: { post: BlogPost; extraClass?: string }) {
   const { photos, pickPhoto } = useSite();
   const slot = 'blog-' + post.slug;
-  const customSrc = photos[slot];
+  const effectiveSrc = photos[slot] || DEFAULT_SLOT_IMAGES[slot];
   return (
     <div className={`bcover v${post.v} ${extraClass}`.trim()} data-slot={slot}>
-      {customSrc ? <img src={customSrc} alt="" /> : <Icon name={post.ic} />}
+      {effectiveSrc ? (
+        <img src={effectiveSrc} alt={post.t} loading="lazy" />
+      ) : (
+        <Icon name={post.ic} />
+      )}
       <button
         type="button"
         className="rp"
@@ -478,7 +618,7 @@ export function CustomDropdown({
       >
         <span className={`dd-val ${sel ? '' : 'ph'}`.trim()}>
           {sel && sel.ic ? <Icon name={sel.ic} /> : null}
-          {sel ? sel.l : placeholder}
+          <span>{sel ? sel.l : placeholder}</span>
         </span>
         <Icon name="chevron-down" />
       </button>

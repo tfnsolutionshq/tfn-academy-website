@@ -167,10 +167,7 @@ export default function CorporatePage() {
       </section>
 
       <section className="sec on-night">
-        <div
-          className="wrap split"
-          style={{ gridTemplateColumns: 'minmax(0,1.1fr) minmax(0,1fr)' }}
-        >
+        <div className="wrap split rev">
           <div>
             <div className="head" style={{ marginBottom: 26 }}>
               <h2>On-site or online, whichever suits your team</h2>
