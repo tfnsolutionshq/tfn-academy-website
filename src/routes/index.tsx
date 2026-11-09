@@ -16,7 +16,7 @@ const CorporatePage = lazy(() => import('@/pages/corporate/presentation/Corporat
 const HireTalentsPage = lazy(() => import('@/pages/hire-talents/presentation/HireTalentsPage'));
 const VerifyPage = lazy(() => import('@/pages/verify/presentation/VerifyPage'));
 const BlogPage = lazy(() => import('@/pages/blog/presentation/BlogPage'));
-const BlogPostPage = lazy(() => import('@/pages/blog-post/presentation/BlogPostPage'));
+const BlogPostPage = lazy(() => import('@/pages/blog/presentation/BlogPostPage'));
 const CareersPage = lazy(() => import('@/pages/careers/presentation/CareersPage'));
 const HubPage = lazy(() => import('@/pages/hub/presentation/HubPage'));
 const NotFoundPage = lazy(() => import('@/pages/not-found/presentation/NotFoundPage'));
