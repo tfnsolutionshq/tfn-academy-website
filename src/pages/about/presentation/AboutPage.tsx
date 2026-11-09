@@ -86,10 +86,7 @@ export default function AboutPage() {
       </section>
 
       <section className="sec">
-        <div
-          className="wrap split"
-          style={{ gridTemplateColumns: 'minmax(0,1.1fr) minmax(0,.9fr)' }}
-        >
+        <div className="wrap split rev">
           <div>
             <h2 style={{ marginBottom: 18 }}>A subsidiary of TFN Solutions</h2>
             <p className="lede">
