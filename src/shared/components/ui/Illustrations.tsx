@@ -205,7 +205,6 @@ import progVaImg from '@/assets/optimized/prog-va.jpg';
 
 // Academy pages images
 import acadAboutImg from '@/assets/optimized/acad-about.jpg';
-import acadAbout2Img from '@/assets/optimized/acad-about2.jpg';
 import acadAboutHubImg from '@/assets/optimized/acad-about-hub.jpg';
 import acadAdmImg from '@/assets/optimized/acad-adm.jpg';
 import acadKids1Img from '@/assets/optimized/acad-kids1.jpg';
@@ -272,7 +271,7 @@ const DEFAULT_SLOT_IMAGES: Record<string, string> = {
 
   // Academy sub-pages
   about: acadAboutImg,
-  about2: acadAbout2Img,
+  about2: progBrandingImg,
   'about-hub': acadAboutHubImg,
   adm: acadAdmImg,
   kids1: acadKids1Img,
