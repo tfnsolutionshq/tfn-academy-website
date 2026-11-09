@@ -224,7 +224,7 @@ import blogVaImg from '@/assets/optimized/blog-va.jpg';
 import blogKidsImg from '@/assets/optimized/blog-kids.jpg';
 import blogCertsImg from '@/assets/optimized/blog-certs.jpg';
 
-// Corporate & Hire Talents images
+// Corporate, Hire Talents & Hub images
 import corp1Img from '@/assets/optimized/corp1.jpg';
 import corp2Img from '@/assets/optimized/corp2.jpg';
 import corp3Img from '@/assets/optimized/corp3.jpg';
@@ -233,6 +233,12 @@ import corpOnsite2Img from '@/assets/optimized/corp-onsite2.jpg';
 import corpOnlineImg from '@/assets/optimized/corp-online.jpg';
 import corpBandImg from '@/assets/optimized/corp-band.jpg';
 import hireImg from '@/assets/optimized/hire.jpg';
+import hub1Img from '@/assets/optimized/hub1.jpg';
+import hub2Img from '@/assets/optimized/hub2.jpg';
+import hub3Img from '@/assets/optimized/hub3.jpg';
+import hubSpaceTrainingImg from '@/assets/optimized/hub-space-training.jpg';
+import hubSpaceFlexiImg from '@/assets/optimized/hub-space-flexi.jpg';
+import hubSpaceMeetingImg from '@/assets/optimized/hub-space-meeting.jpg';
 
 const DEFAULT_SLOT_IMAGES: Record<string, string> = {
   hero1: hero1Img,
@@ -302,6 +308,14 @@ const DEFAULT_SLOT_IMAGES: Record<string, string> = {
 
   // Hire Talents hero
   hire: hireImg,
+
+  // TFN Hub
+  hub1: hub1Img,
+  hub2: hub2Img,
+  hub3: hub3Img,
+  'space-training': hubSpaceTrainingImg,
+  'space-flexi': hubSpaceFlexiImg,
+  'space-meeting': hubSpaceMeetingImg,
 };
 
 export function Photo({

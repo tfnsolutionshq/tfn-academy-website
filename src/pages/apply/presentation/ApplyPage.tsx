@@ -408,7 +408,24 @@ export default function ApplyPage() {
               </p>
               <div className="ref">
                 <Icon name="flag" />
-                {applied.ref}
+                <span>{applied.ref}</span>
+                <button
+                  type="button"
+                  className="iconbtn sm"
+                  aria-label="Copy admission number"
+                  title="Copy admission number"
+                  onClick={() => {
+                    (navigator.clipboard
+                      ? navigator.clipboard.writeText(applied.ref)
+                      : Promise.reject()
+                    ).then(
+                      () => showToast('Admission number copied'),
+                      () => showToast('Copy not available. Please copy it manually.'),
+                    );
+                  }}
+                >
+                  <Icon name="copy" />
+                </button>
               </div>
               <div className="wa">
                 <span className="wa-ic">
@@ -543,9 +560,26 @@ export default function ApplyPage() {
             </p>
             <div className="ref">
               <Icon name="flag" />
-              {applied.ref}
+              <span>{applied.ref}</span>
+              <button
+                type="button"
+                className="iconbtn sm"
+                aria-label="Copy admission number"
+                title="Copy admission number"
+                onClick={() => {
+                  (navigator.clipboard
+                    ? navigator.clipboard.writeText(applied.ref)
+                    : Promise.reject()
+                  ).then(
+                    () => showToast('Admission number copied'),
+                    () => showToast('Copy not available. Please copy it manually.'),
+                  );
+                }}
+              >
+                <Icon name="copy" />
+              </button>
             </div>
-            <div className="callout" style={{ marginTop: 8 }}>
+            <div className="callout" style={{ marginTop: 22 }}>
               <Icon name="download" />
               <span>
                 <b>Keep your application receipt.</b> Download it now for your records.
