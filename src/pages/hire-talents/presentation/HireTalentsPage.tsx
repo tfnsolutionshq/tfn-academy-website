@@ -72,6 +72,19 @@ export default function HireTalentsPage() {
 
   const filteredTalent = TALENT.filter((t) => hireNiche === 'all' || t.s === hireNiche);
 
+  const talentOpts = [
+    ...TALENT.map((t) => {
+      const tr = findTrack(t.s);
+      return {
+        v: t.id,
+        l: t.n,
+        r: t.role,
+        ic: tr?.ic || 'user-check',
+      };
+    }),
+    { v: 'any', l: 'No specific talent (match me)', ic: 'users' },
+  ];
+
   const needOpts = [
     ...TRACKS.map((t) => ({
       v: t.short,
@@ -83,6 +96,25 @@ export default function HireTalentsPage() {
   ];
 
   const selectedTalent = form.talent ? TALENT.find((t) => t.id === form.talent) : null;
+
+  const handleTalentChange = (val: string) => {
+    const talentId = val === 'any' ? '' : val;
+    const tRec = talentId ? TALENT.find((x) => x.id === talentId) : undefined;
+    const tProg = tRec ? findTrack(tRec.s) : undefined;
+    setForm((prev) => ({
+      ...prev,
+      talent: talentId,
+      need: tProg ? tProg.short : prev.need,
+    }));
+    if (tProg) {
+      setErr((prev) => {
+        if (!prev.need) return prev;
+        const next = { ...prev };
+        delete next.need;
+        return next;
+      });
+    }
+  };
 
   const updateField = (key: keyof typeof INITIAL_CONSULT, val: string) => {
     setForm((prev) => ({ ...prev, [key]: val }));
@@ -445,6 +477,17 @@ export default function HireTalentsPage() {
                   </div>
 
                   <div className="f2">
+                    <div className="fld">
+                      <label htmlFor="dd-consult.talent">Talent</label>
+                      <CustomDropdown
+                        id="consult.talent"
+                        value={form.talent}
+                        onChange={handleTalentChange}
+                        options={talentOpts}
+                        placeholder="Choose a talent (optional)"
+                      />
+                    </div>
+
                     <div className={`fld ${err.need ? 'err' : ''}`.trim()}>
                       <label htmlFor="dd-consult.need">Skill or niche needed</label>
                       <CustomDropdown
@@ -461,7 +504,9 @@ export default function HireTalentsPage() {
                         </span>
                       ) : null}
                     </div>
+                  </div>
 
+                  <div className="f2">
                     <div className={`fld ${err.type ? 'err' : ''}`.trim()}>
                       <label htmlFor="dd-consult.type">Type of engagement</label>
                       <CustomDropdown
@@ -483,23 +528,23 @@ export default function HireTalentsPage() {
                         </span>
                       ) : null}
                     </div>
-                  </div>
 
-                  <div className={`fld ${err.budget ? 'err' : ''}`.trim()}>
-                    <label htmlFor="dd-consult.budget">Budget range</label>
-                    <CustomDropdown
-                      id="consult.budget"
-                      value={form.budget}
-                      onChange={(v) => updateField('budget', v)}
-                      options={BUDGETS.map((b) => ({ v: b, l: b }))}
-                      placeholder="Choose a budget range"
-                    />
-                    {err.budget ? (
-                      <span className="emsg">
-                        <Icon name="circle-alert" />
-                        {err.budget}
-                      </span>
-                    ) : null}
+                    <div className={`fld ${err.budget ? 'err' : ''}`.trim()}>
+                      <label htmlFor="dd-consult.budget">Budget range</label>
+                      <CustomDropdown
+                        id="consult.budget"
+                        value={form.budget}
+                        onChange={(v) => updateField('budget', v)}
+                        options={BUDGETS.map((b) => ({ v: b, l: b }))}
+                        placeholder="Choose a budget range"
+                      />
+                      {err.budget ? (
+                        <span className="emsg">
+                          <Icon name="circle-alert" />
+                          {err.budget}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div className={`fld ${err.msg ? 'err' : ''}`.trim()}>
