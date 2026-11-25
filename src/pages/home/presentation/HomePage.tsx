@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   ALL_CERTS,
@@ -25,6 +25,15 @@ import {
   spaceSvg,
 } from '@/shared/components/ui/Illustrations';
 import { useSite } from '@/shared/context/SiteContext';
+import {
+  mapApiSummaryToTrack,
+  useFaqsQuery,
+  useHomeQuery,
+  useProgrammeCategoriesQuery,
+  useProgrammesQuery,
+} from '@/hooks/queries';
+import { ProgrammeCardSkeleton, BlogCardSkeleton } from '@/shared/components/ui/Loading';
+import type { Track, BlogPost, StudentStory, FaqItem } from '@/shared/types/academy';
 
 const AUDIENCE: Array<[title: string, desc: string, idx: number, slot: string]> = [
   [
@@ -75,10 +84,96 @@ export default function HomePage() {
   const [certInput, setCertInput] = useState('');
   const certTabsRef = useRef<HTMLDivElement>(null);
 
+  const { data: homeData, isLoading: isHomeLoading } = useHomeQuery();
+  const { data: apiFaqs } = useFaqsQuery();
+  const { data: apiCategories } = useProgrammeCategoriesQuery();
+
+  const progCount = homeData?.stats?.programmes_count ?? TRACKS.length;
+  const certCount = homeData?.stats?.certifications_count ?? ALL_CERTS.length;
+
   const isAllCat = homeCat === 'all';
-  const progList = isAllCat
-    ? FEATURED.map((s) => findTrack(s)).filter((x): x is NonNullable<typeof x> => Boolean(x))
-    : TRACKS.filter((t) => t.cat === homeCat);
+
+  const {
+    data: categoryProgrammes,
+    isLoading: isCategoryLoading,
+  } = useProgrammesQuery(
+    { category: homeCat, per_page: 20 },
+    { enabled: !isAllCat },
+  );
+
+  const homeCategories = useMemo(() => {
+    if (apiCategories && apiCategories.length > 0) {
+      return [...apiCategories]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((c) => [c.slug, c.name] as const);
+    }
+    return CATS.map((c) => [c.id, c.name] as const);
+  }, [apiCategories]);
+
+  const faqItems = useMemo<FaqItem[]>(() => {
+    if (apiFaqs && apiFaqs.length > 0) {
+      return [...apiFaqs]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((f) => [f.question, f.answer]);
+    }
+    return FAQS;
+  }, [apiFaqs]);
+
+  const featuredList = useMemo<Track[]>(() => {
+    if (homeData?.featured_programmes && homeData.featured_programmes.length > 0) {
+      return homeData.featured_programmes.map(mapApiSummaryToTrack);
+    }
+    return FEATURED.map((s) => findTrack(s)).filter((x): x is NonNullable<typeof x> => Boolean(x));
+  }, [homeData?.featured_programmes]);
+
+  const progList: Track[] = useMemo(() => {
+    if (isAllCat) return featuredList;
+    if (categoryProgrammes?.data && categoryProgrammes.data.length > 0) {
+      return categoryProgrammes.data.map(mapApiSummaryToTrack);
+    }
+    return TRACKS.filter((t) => t.cat === homeCat);
+  }, [categoryProgrammes?.data, featuredList, homeCat, isAllCat]);
+
+  const storiesList = useMemo<StudentStory[]>(() => {
+    if (homeData?.testimonials && homeData.testimonials.length > 0) {
+      return homeData.testimonials.map((t) => ({
+        n: t.student_name,
+        s: t.programme_slug,
+        p: (t.sort_order - 1) % 13,
+        q: t.quote,
+        r: t.programme_label,
+      }));
+    }
+    return STORIES;
+  }, [homeData?.testimonials]);
+
+  const blogList = useMemo<BlogPost[]>(() => {
+    if (homeData?.latest_blog_posts && homeData.latest_blog_posts.length > 0) {
+      return homeData.latest_blog_posts.map((b) => {
+        const existing = BLOG.find((p) => p.slug === b.slug);
+        if (existing) {
+          return {
+            ...existing,
+            t: b.title,
+            cat: b.category?.name || existing.cat,
+            read: b.read_time_label || existing.read,
+            ex: b.excerpt || existing.ex,
+          };
+        }
+        return {
+          slug: b.slug,
+          t: b.title,
+          cat: b.category?.name || 'General',
+          read: b.read_time_label || `${b.read_time} min read`,
+          ic: b.cover_icon || 'compass',
+          v: 1,
+          ex: b.excerpt,
+          body: [],
+        };
+      });
+    }
+    return BLOG.slice(0, 3);
+  }, [homeData?.latest_blog_posts]);
 
   const selectedCertTrack = certTab === 'all' ? null : findTrack(certTab);
   const certList = certTab === 'all' ? ALL_CERTS : selectedCertTrack?.certs || [];
@@ -136,7 +231,7 @@ export default function HomePage() {
             <div className="c">
               <Icon name="graduation-cap" />
               <div>
-                <b>{TRACKS.length}</b>
+                <b>{progCount}</b>
                 <br />
                 <span>programmes across tech, creative and business</span>
               </div>
@@ -157,7 +252,7 @@ export default function HomePage() {
           <div className="s">
             <Icon name="layers" />
             <div>
-              <b>{TRACKS.length} programmes</b>
+              <b>{progCount} programmes</b>
               <span>Tech, creative and business</span>
             </div>
           </div>
@@ -196,12 +291,12 @@ export default function HomePage() {
               </p>
             </div>
             <Link className="tlink" to="/programmes">
-              See all {TRACKS.length} programmes <Icon name="arrow-right" />
+              See all {progCount} programmes <Icon name="arrow-right" />
             </Link>
           </div>
 
           <div className="tabs-scroll" id="hcats">
-            {([['all', 'Featured'], ...CATS.map((c) => [c.id, c.name])] as const).map(([id, n]) => (
+            {([['all', 'Featured'], ...homeCategories] as const).map(([id, n]) => (
               <button
                 key={id}
                 type="button"
@@ -215,9 +310,21 @@ export default function HomePage() {
 
           <div id="hp">
             <div className="pgrid">
-              {progList.map((t) => (
-                <ProgrammeCard key={t.slug} track={t} />
-              ))}
+              {(isHomeLoading && !homeData && isAllCat) ||
+              (!isAllCat && isCategoryLoading && !categoryProgrammes) ? (
+                <>
+                  <ProgrammeCardSkeleton />
+                  <ProgrammeCardSkeleton />
+                  <ProgrammeCardSkeleton />
+                  <ProgrammeCardSkeleton />
+                  <ProgrammeCardSkeleton />
+                  <ProgrammeCardSkeleton />
+                </>
+              ) : (
+                progList.map((t) => (
+                  <ProgrammeCard key={t.slug} track={t} />
+                ))
+              )}
               {isAllCat ? (
                 <>
                   <Link
@@ -250,7 +357,7 @@ export default function HomePage() {
                   <div className="pbody">
                     <h3>See every programme</h3>
                     <p>
-                      Browse all {TRACKS.length} programmes across tech, creative and business.
+                      Browse all {progCount} programmes across tech, creative and business.
                     </p>
                     <span className="go">
                       Browse all <Icon name="arrow-right" />
@@ -504,7 +611,7 @@ export default function HomePage() {
             ) : (
               <div className="certnote">
                 <span className="muted">
-                  {ALL_CERTS.length} certifications across {TRACKS.length} programmes. Pick a
+                  {certCount} certifications across {progCount} programmes. Pick a
                   programme above to see its certifications.
                 </span>
               </div>
@@ -526,8 +633,8 @@ export default function HomePage() {
         <Marquee
           durationSec={75}
           label="Student stories"
-          items={STORIES.map((s, i) => (
-            <div key={s.n} className="story">
+          items={storiesList.map((s, i) => (
+            <div key={`${s.n}-${i}`} className="story">
               <Icon name="quote" className="q" />
               <blockquote>“{s.q}”</blockquote>
               <div className="who">
@@ -613,9 +720,17 @@ export default function HomePage() {
             </Link>
           </div>
           <div className="blogs">
-            {BLOG.slice(0, 3).map((b) => (
-              <BlogCard key={b.slug} post={b} />
-            ))}
+            {isHomeLoading && !homeData ? (
+              <>
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+              </>
+            ) : (
+              blogList.map((b) => (
+                <BlogCard key={b.slug} post={b} />
+              ))
+            )}
           </div>
         </div>
       </section>
@@ -628,7 +743,7 @@ export default function HomePage() {
               Can’t find your answer? <Link to="/contact">Ask admissions</Link>.
             </p>
           </div>
-          <FaqList items={FAQS.slice(0, 6)} />
+          <FaqList items={faqItems.slice(0, 6)} />
         </div>
       </section>
 

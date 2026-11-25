@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   BANK,
@@ -19,8 +19,15 @@ import {
 import type { PromoCode, Scholarship } from '@/shared/types/academy';
 import { Icon } from '@/shared/components/ui/Icon';
 import { CustomDropdown, OdTag } from '@/shared/components/ui/Illustrations';
+import { Spinner } from '@/shared/components/ui/Loading';
 import { useSite } from '@/shared/context/SiteContext';
 import { useToast } from '@/shared/context/ToastContext';
+import {
+  useProgrammesQuery,
+  useScholarshipsQuery,
+  useSubmitApplicationMutation,
+} from '@/hooks/queries';
+import type { ApiApplicationPayload } from '@/core/api';
 
 const ngn = (n: number) => 'NGN ' + n.toLocaleString('en-NG');
 const fdate = (s: string) =>
@@ -186,6 +193,48 @@ export default function ApplyPage() {
   const [promoErr, setPromoErr] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
 
+  const { data: apiProgrammesPage } = useProgrammesQuery({ per_page: 50 });
+  const { data: apiScholarships } = useScholarshipsQuery();
+  const {
+    mutateAsync: submitApplication,
+    isPending: isSubmitting,
+  } = useSubmitApplicationMutation();
+
+  const liveSeatsMap = useMemo(() => {
+    const map: Record<string, number> = { ...SEATS };
+    if (apiProgrammesPage?.data) {
+      for (const p of apiProgrammesPage.data) {
+        map[p.slug] = p.seats_available;
+      }
+    }
+    return map;
+  }, [apiProgrammesPage?.data]);
+
+  const liveSchols = useMemo<Scholarship[]>(() => {
+    if (apiScholarships && apiScholarships.length > 0) {
+      return apiScholarships.map((s) => ({
+        id: s.code,
+        n: s.name,
+        pct: s.percent,
+        ic: s.icon || 'award',
+        tag: s.badge || undefined,
+        d: s.description,
+        req: s.requirements || [],
+        ask: s.applicant_prompt || '',
+        fin: Boolean(s.requires_financial_circumstances),
+        rule:
+          s.eligibility_rule?.type === 'gender'
+            ? 'female'
+            : s.eligibility_rule?.type === 'age_range'
+              ? 'age1830'
+              : s.eligibility_rule?.type === 'max_age_exclusive'
+                ? 'minor'
+                : undefined,
+      }));
+    }
+    return SCHOLS;
+  }, [apiScholarships]);
+
   useEffect(() => {
     if (applyPreset.key > 0) {
       setApplied(null);
@@ -325,29 +374,116 @@ export default function ApplyPage() {
     }, 20);
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
+    if (isSubmitting) return;
     if (!validateStep(A.step)) {
       focusFirstError();
       return;
     }
     if (A.step === 4) {
-      if (A.type === 'scholarship') {
-        const rec: AppliedRecord = {
-          ...A,
-          ref: 'SCH-' + String(Math.floor(10000 + Math.random() * 90000)),
-          kind: 'scholarship',
-        };
-        setApplied(rec);
-        setA(freshApply());
-        window.scrollTo(0, 0);
-        showToast('Application submitted');
-      } else {
-        setA((prev) => ({
-          ...prev,
-          step: 5,
-          pay: { method: '', deadline: 0, state: 'idle', ref: '' },
-        }));
-        window.scrollTo(0, 0);
+      const applicantAge = ageOf(A.dob);
+      const isMinorApplicant = applicantAge !== null && applicantAge < 18;
+      const cleanPhone = A.phone.replace(/[\s-]/g, '');
+      const cleanWa = (A.wa.trim() || A.phone).replace(/[\s-]/g, '');
+
+      const payload: ApiApplicationPayload = {
+        type: A.type,
+        programme_slug: A.t,
+        starting_point: A.start || 'Beginner',
+        name: A.name.trim(),
+        gender: A.gender,
+        dob: A.dob,
+        email: A.email.trim(),
+        phone: cleanPhone,
+        whatsapp: cleanWa,
+        state: A.state,
+        address: A.address.trim(),
+        education_level: A.edu,
+        current_status: A.status,
+        heard_about: A.heard || 'Other',
+        environment: A.env || 'inperson',
+        consent: A.consent,
+        ...(A.type === 'scholarship'
+          ? {
+              scholarship_code: A.schol || null,
+              motivation: A.motive.trim(),
+              supporting_details: A.support.trim(),
+              ...(A.fin.trim() ? { financial_circumstances: A.fin.trim() } : {}),
+              ...(A.cv.trim() ? { portfolio_url: A.cv.trim() } : {}),
+            }
+          : {}),
+        ...(isMinorApplicant
+          ? {
+              guardian_name: A.guardian.trim(),
+              guardian_phone: A.gphone.replace(/[\s-]/g, ''),
+            }
+          : {}),
+      };
+
+      try {
+        const res = await submitApplication(payload);
+        const serverRef =
+          res?.reference ||
+          res?.ref ||
+          res?.admission_number ||
+          res?.id ||
+          (A.type === 'scholarship'
+            ? 'SCH-' + String(Math.floor(10000 + Math.random() * 90000))
+            : 'TFN-' + String(Math.floor(10000 + Math.random() * 90000)));
+
+        if (A.type === 'scholarship') {
+          const rec: AppliedRecord = {
+            ...A,
+            ref: serverRef,
+            kind: 'scholarship',
+          };
+          setApplied(rec);
+          setA(freshApply());
+          window.scrollTo(0, 0);
+          showToast('Application submitted');
+        } else {
+          setA((prev) => ({
+            ...prev,
+            step: 5,
+            pay: { method: '', deadline: 0, state: 'idle', ref: serverRef },
+          }));
+          window.scrollTo(0, 0);
+          showToast('Application saved — proceed to payment');
+        }
+      } catch (error: unknown) {
+        const apiErr = error as { message?: string; status?: number; errors?: Record<string, string[]> };
+        if (apiErr?.errors && Object.keys(apiErr.errors).length > 0) {
+          const fieldMap: Record<string, string> = {
+            programme_slug: 't',
+            starting_point: 'start',
+            scholarship_code: 'schol',
+            whatsapp: 'wa',
+            education_level: 'edu',
+            current_status: 'status',
+            heard_about: 'heard',
+            environment: 'env',
+            motivation: 'motive',
+            supporting_details: 'support',
+            financial_circumstances: 'fin',
+            guardian_name: 'guardian',
+            guardian_phone: 'gphone',
+          };
+          const mapped: Record<string, string> = {};
+          for (const [k, msgs] of Object.entries(apiErr.errors)) {
+            if (msgs && msgs.length > 0) {
+              mapped[fieldMap[k] || k] = msgs[0];
+            }
+          }
+          setErr(mapped);
+          const step1Fields = ['t', 'start', 'schol'];
+          if (Object.keys(mapped).some((k) => step1Fields.includes(k))) {
+            setA((prev) => ({ ...prev, step: 1 }));
+          } else {
+            setA((prev) => ({ ...prev, step: 2 }));
+          }
+          focusFirstError();
+        }
+        showToast(apiErr?.message || 'Could not submit application. Please try again.');
       }
       return;
     }
@@ -364,7 +500,7 @@ export default function ApplyPage() {
   const finishPayment = (method: string) => {
     setApplied({
       ...A,
-      ref: 'TFN-' + String(Math.floor(10000 + Math.random() * 90000)),
+      ref: A.pay.ref || 'TFN-' + String(Math.floor(10000 + Math.random() * 90000)),
       kind: 'paid',
       method,
       paidAt: new Date().toLocaleString('en-GB'),
@@ -651,18 +787,21 @@ export default function ApplyPage() {
       : ['Course', 'Your details', 'Environment', 'Review', 'Payment'];
   const pct = Math.round((A.step / st.length) * 100);
   const t = A.t ? findTrack(A.t) : undefined;
-  const sc = A.type === 'scholarship' ? SCHOLS.find((x) => x.id === A.schol) : undefined;
+  const sc = A.type === 'scholarship' ? liveSchols.find((x) => x.id === A.schol) : undefined;
   const age = ageOf(A.dob);
   const minor = age !== null && age < 18;
 
-  const progOptsSeats = TRACKS.map((tr) => ({
-    v: tr.slug,
-    l: tr.short,
-    ic: tr.ic,
-    g: findCategory(tr.cat)?.name,
-    r: `${seatsOf(tr.slug)} seats left`,
-    rc: seatsOf(tr.slug) < 8 ? 'low' : '',
-  }));
+  const progOptsSeats = TRACKS.map((tr) => {
+    const seats = liveSeatsMap[tr.slug] ?? seatsOf(tr.slug);
+    return {
+      v: tr.slug,
+      l: tr.short,
+      ic: tr.ic,
+      g: findCategory(tr.cat)?.name,
+      r: `${seats} seats left`,
+      rc: seats < 8 ? 'low' : '',
+    };
+  });
 
   const nextLabel =
     A.step === 4
@@ -782,7 +921,7 @@ export default function ApplyPage() {
                             id="apply.schol"
                             value={A.schol}
                             onChange={(v) => updateField('schol', v)}
-                            options={SCHOLS.map((x) => ({
+                            options={liveSchols.map((x) => ({
                               v: x.id,
                               l: x.n,
                               ic: x.ic,
@@ -1832,8 +1971,22 @@ export default function ApplyPage() {
                   <span />
                 )}
                 {A.step < 5 ? (
-                  <button type="button" className="btn btn-brand" onClick={handleNext}>
-                    {nextLabel} <Icon name="arrow-right" className="arr" />
+                  <button
+                    type="button"
+                    className="btn btn-brand"
+                    disabled={isSubmitting}
+                    onClick={handleNext}
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Spinner size="xs" variant="white" label="Submitting application..." />
+                        Submitting...
+                      </>
+                    ) : (
+                      <>
+                        {nextLabel} <Icon name="arrow-right" className="arr" />
+                      </>
+                    )}
                   </button>
                 ) : (
                   <span />

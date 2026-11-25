@@ -3,4 +3,5 @@ dist
 .DS_Store
 *.local
 .vite
+.env
 tfn-academy-website-v6.html

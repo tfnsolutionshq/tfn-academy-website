@@ -1,7 +1,16 @@
+import { PagePreloader } from './Loading';
+
 export function PageLoader() {
-  return (
-    <div style={{ display: 'grid', placeItems: 'center', minHeight: '60vh' }}>
-      <span className="spin" aria-label="Loading page" />
-    </div>
-  );
+  return <PagePreloader message="Loading page..." />;
 }
+
+export {
+  AppPreloader,
+  PagePreloader,
+  GlobalLoading,
+  Spinner,
+  Skeleton,
+  SkeletonText,
+  ProgrammeCardSkeleton,
+  BlogCardSkeleton,
+} from './Loading';

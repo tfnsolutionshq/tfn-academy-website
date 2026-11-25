@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FAQS, TRACKS, findCategory, findTrack } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
@@ -10,6 +10,8 @@ import {
   Photo,
 } from '@/shared/components/ui/Illustrations';
 import { useSite } from '@/shared/context/SiteContext';
+import { useFaqsQuery } from '@/hooks/queries';
+import type { FaqItem } from '@/shared/types/academy';
 
 const ADM_CHIPS: Array<[id: string, label: string]> = [
   ['adm-who', 'Who can apply'],
@@ -36,6 +38,16 @@ const ADM_STEPS: Array<[title: string, desc: string]> = [
 export default function AdmissionsPage() {
   const { startApplyNew } = useSite();
   const [toolSlug, setToolSlug] = useState('frontend');
+  const { data: apiFaqs } = useFaqsQuery();
+
+  const faqItems = useMemo<FaqItem[]>(() => {
+    if (apiFaqs && apiFaqs.length > 0) {
+      return [...apiFaqs]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((f) => [f.question, f.answer]);
+    }
+    return FAQS;
+  }, [apiFaqs]);
 
   const tool = findTrack(toolSlug) || TRACKS[0];
   const progOpts = TRACKS.map((t) => ({
@@ -335,7 +347,7 @@ export default function AdmissionsPage() {
           <div>
             <h2>Frequently asked questions</h2>
           </div>
-          <FaqList items={FAQS} />
+          <FaqList items={faqItems} />
         </div>
       </section>
 

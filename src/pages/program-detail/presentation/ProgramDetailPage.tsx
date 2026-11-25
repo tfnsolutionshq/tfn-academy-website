@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { TRACKS, findCategory, findTrack } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
@@ -9,8 +9,16 @@ import {
   ProgrammeCard,
   downloadSyllabus,
 } from '@/shared/components/ui/Illustrations';
+import { GlobalLoading, Spinner } from '@/shared/components/ui/Loading';
 import { useSite } from '@/shared/context/SiteContext';
 import { useToast } from '@/shared/context/ToastContext';
+import {
+  mapApiDetailToTrack,
+  mapApiSummaryToTrack,
+  useProgrammeDetailQuery,
+  useProgrammesQuery,
+} from '@/hooks/queries';
+import { programmeService } from '@/services/programme.service';
 
 const SECS: Array<[key: string, label: string]> = [
   ['ov', 'Overview'],
@@ -31,8 +39,20 @@ export default function ProgramDetailPage() {
   const [levelIdx, setLevelIdx] = useState(0);
   const [activeSec, setActiveSec] = useState('ov');
   const [openMods, setOpenMods] = useState<Record<number, boolean>>({});
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
-  const t = slug ? findTrack(slug) : undefined;
+  const { data: apiDetail, isLoading: isDetailLoading } = useProgrammeDetailQuery(slug);
+
+  const staticTrack = slug ? findTrack(slug) : undefined;
+  const t = useMemo(() => {
+    if (apiDetail) return mapApiDetailToTrack(apiDetail);
+    return staticTrack;
+  }, [apiDetail, staticTrack]);
+
+  const { data: relatedApi } = useProgrammesQuery(
+    { category: t?.cat, per_page: 6 },
+    { enabled: Boolean(t?.cat) },
+  );
 
   useEffect(() => {
     setLevelIdx(0);
@@ -57,14 +77,18 @@ export default function ProgramDetailPage() {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
+  if (isDetailLoading && !t) {
+    return <GlobalLoading message="Loading programme curriculum..." />;
+  }
+
   if (!t) {
     return <Navigate to="/programmes" replace />;
   }
 
   const L = t.levels[levelIdx] || t.levels[0];
-  const idx = TRACKS.indexOf(t);
+  const idx = Math.max(0, TRACKS.findIndex((x) => x.slug === t.slug));
   const f = t.fq;
-  const cat = findCategory(t.cat);
+  const catName = apiDetail?.category_details?.name || findCategory(t.cat)?.name;
   const stages =
     t.levels.length === 2 ? 'Beginner and Advanced stages' : 'One complete course';
 
@@ -76,7 +100,27 @@ export default function ProgramDetailPage() {
     return i > -1 ? cap1(bits[i + 1].trim().replace(/\.$/, '')) + '.' : '';
   };
 
-  const related = TRACKS.filter((x) => x.cat === t.cat && x.slug !== t.slug).slice(0, 3);
+  const related =
+    relatedApi?.data && relatedApi.data.length > 0
+      ? relatedApi.data
+          .filter((x) => x.slug !== t.slug)
+          .slice(0, 3)
+          .map(mapApiSummaryToTrack)
+      : TRACKS.filter((x) => x.cat === t.cat && x.slug !== t.slug).slice(0, 3);
+
+  const handleDownloadSyllabus = async () => {
+    if (isDownloadingPdf) return;
+    setIsDownloadingPdf(true);
+    try {
+      await programmeService.downloadSyllabusPdf(t.slug);
+      showToast(`${t.short} syllabus PDF downloaded`);
+    } catch {
+      // Fallback to local HTML syllabus generator if PDF endpoint is unreachable
+      downloadSyllabus(t.slug, showToast);
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
 
   const renderSeg = () =>
     t.levels.length > 1 ? (
@@ -108,10 +152,13 @@ export default function ProgramDetailPage() {
           <div className="pd-grid">
             <div className="t">
               <div className="pd-meta">
-                <span className="pill lt">{cat?.name}</span>
+                {catName ? <span className="pill lt">{catName}</span> : null}
                 <span className="pill lt">{stages}</span>
                 <span className="pill lt">{t.certs.length} certifications</span>
                 <span className="pill lt">In-person and hybrid</span>
+                {apiDetail?.seats_available !== undefined ? (
+                  <span className="pill lt">{apiDetail.seats_available} seats left</span>
+                ) : null}
               </div>
               <h1>{t.short}</h1>
               <p className="lede">{t.line}</p>
@@ -126,10 +173,15 @@ export default function ProgramDetailPage() {
                 <button
                   type="button"
                   className="btn btn-line-w"
-                  onClick={() => downloadSyllabus(t.slug, showToast)}
+                  disabled={isDownloadingPdf}
+                  onClick={handleDownloadSyllabus}
                 >
-                  <Icon name="download" />
-                  Download syllabus
+                  {isDownloadingPdf ? (
+                    <Spinner size="xs" variant="white" label="Downloading syllabus..." />
+                  ) : (
+                    <Icon name="download" />
+                  )}
+                  {isDownloadingPdf ? 'Downloading...' : 'Download syllabus'}
                 </button>
               </div>
             </div>
@@ -161,7 +213,7 @@ export default function ProgramDetailPage() {
           <div>
             <div className="pd-sec" id="pd-ov">
               <h2>What you’ll gain</h2>
-              <p className="lede">{L.expect}</p>
+              {L ? <p className="lede">{L.expect}</p> : null}
               <div className="ov">
                 <div className="ovc">
                   <Icon name="book-open" />
@@ -194,8 +246,8 @@ export default function ProgramDetailPage() {
               {renderSeg()}
               {t.levels.length === 1 ? <span className="pill">One complete course</span> : null}
               <div className="mods">
-                {L.mods.map((m, i) => {
-                  const isCap = /^capstone/i.test(m.n);
+                {(L?.mods || []).map((m, i) => {
+                  const isCap = m.isCapstone ?? /^capstone/i.test(m.n);
                   const isOpen = !!openMods[i];
                   return (
                     <div
@@ -208,7 +260,14 @@ export default function ProgramDetailPage() {
                         onClick={() => setOpenMods((prev) => ({ ...prev, [i]: !prev[i] }))}
                       >
                         <span className="mi">{isCap ? <Icon name="award" /> : i + 1}</span>
-                        <span className="mn">{m.n}</span>
+                        <span className="mn">
+                          {m.n}
+                          {m.isCertPrep ? (
+                            <span className="pill" style={{ marginLeft: 8, fontSize: '0.72rem' }}>
+                              Cert prep
+                            </span>
+                          ) : null}
+                        </span>
                         <Icon name="chevron-down" />
                       </button>
                       <div className="bw">
@@ -241,15 +300,18 @@ export default function ProgramDetailPage() {
               </p>
               {renderSeg()}
               <div className="projs">
-                {L.projs.map((p) => (
-                  <div
-                    key={p.k + p.t}
-                    className={`proj ${p.k === 'Capstone' ? 'cap' : ''}`.trim()}
-                  >
-                    <span className="k">{p.k}</span>
-                    <span>{p.t}</span>
-                  </div>
-                ))}
+                {(L?.projs || []).map((p) => {
+                  const isCapProj = p.isCapstone ?? p.k === 'Capstone';
+                  return (
+                    <div
+                      key={p.k + p.t}
+                      className={`proj ${isCapProj ? 'cap' : ''}`.trim()}
+                    >
+                      <span className="k">{p.k}</span>
+                      <span>{p.t}</span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -331,6 +393,23 @@ export default function ProgramDetailPage() {
           <aside className="side">
             <h3>Interested in {t.short}?</h3>
             <ul>
+              {apiDetail?.fee ? (
+                <li>
+                  <Icon name="check" />
+                  <span>
+                    Course fee: <b>{apiDetail.fee}</b>
+                  </span>
+                </li>
+              ) : null}
+              {apiDetail?.seats_available !== undefined ? (
+                <li>
+                  <Icon name="check" />
+                  <span>
+                    {apiDetail.cohort?.name || 'Current Cohort'}: {apiDetail.seats_available} seats
+                    available
+                  </span>
+                </li>
+              ) : null}
               <li>
                 <Icon name="check" />
                 <span>
@@ -357,7 +436,11 @@ export default function ProgramDetailPage() {
               </li>
               <li>
                 <Icon name="check" />
-                <span>Cohort dates shared when you apply</span>
+                <span>
+                  {apiDetail?.cohort?.start_date
+                    ? `Next cohort starts ${new Date(apiDetail.cohort.start_date).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                    : 'Cohort dates shared when you apply'}
+                </span>
               </li>
             </ul>
             <div className="review-only">
@@ -373,10 +456,15 @@ export default function ProgramDetailPage() {
             <button
               type="button"
               className="btn btn-line"
-              onClick={() => downloadSyllabus(t.slug, showToast)}
+              disabled={isDownloadingPdf}
+              onClick={handleDownloadSyllabus}
             >
-              <Icon name="download" />
-              Download syllabus
+              {isDownloadingPdf ? (
+                <Spinner size="xs" variant="brand" label="Downloading syllabus..." />
+              ) : (
+                <Icon name="download" />
+              )}
+              {isDownloadingPdf ? 'Downloading...' : 'Download syllabus'}
             </button>
           </aside>
         </div>
@@ -384,7 +472,7 @@ export default function ProgramDetailPage() {
 
       <section className="sec-sm on-mist" style={{ marginTop: 32 }}>
         <div className="wrap">
-          <h2 style={{ fontSize: '1.9rem', marginBottom: 28 }}>More in {cat?.name}</h2>
+          <h2 style={{ fontSize: '1.9rem', marginBottom: 28 }}>More in {catName}</h2>
           <div className="pgrid">
             {related.map((r) => (
               <ProgrammeCard key={r.slug} track={r} />
