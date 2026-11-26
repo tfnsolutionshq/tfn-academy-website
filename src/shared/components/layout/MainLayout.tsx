@@ -224,9 +224,6 @@ function Overlay() {
                 {talent.av}
               </span>
               <p style={{ fontWeight: 700, fontSize: '1.1rem', marginTop: 4 }}>{talent.role}</p>
-              <span className="pill" style={{ marginTop: 8 }}>
-                {talentProg.short}
-              </span>
             </div>
             <p>{talent.bio}</p>
             <div>

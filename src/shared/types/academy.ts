@@ -9,11 +9,14 @@ export type ProgrammeCategory = 'software' | 'infra' | 'data' | 'creative' | 'bu
 export interface ProgrammeModule {
   n: string;
   t: string;
+  isCapstone?: boolean;
+  isCertPrep?: boolean;
 }
 
 export interface ProgrammeProject {
   k: string;
   t: string;
+  isCapstone?: boolean;
 }
 
 export interface ProgrammeLevel {
