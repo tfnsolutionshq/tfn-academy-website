@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import PaystackPop from '@paystack/inline-js';
 import {
   BANK,
   COURSE_FEE,
@@ -18,16 +19,29 @@ import {
 } from '@/shared/constants/academyData';
 import type { PromoCode, Scholarship } from '@/shared/types/academy';
 import { Icon } from '@/shared/components/ui/Icon';
-import { CustomDropdown, OdTag } from '@/shared/components/ui/Illustrations';
+import { CustomDropdown } from '@/shared/components/ui/Illustrations';
 import { Spinner } from '@/shared/components/ui/Loading';
 import { useSite } from '@/shared/context/SiteContext';
 import { useToast } from '@/shared/context/ToastContext';
 import {
+  mapApiDetailToTrack,
+  useInitiatePaymentMutation,
+  useMarkTransferMadeMutation,
+  usePaymentStatusQuery,
+  useProgrammeCategoriesQuery,
+  useProgrammeDetailQuery,
   useProgrammesQuery,
   useScholarshipsQuery,
   useSubmitApplicationMutation,
+  useValidatePromoMutation,
+  useVerifyPaymentMutation,
 } from '@/hooks/queries';
-import type { ApiApplicationPayload } from '@/core/api';
+import { paymentService } from '@/services/payment.service';
+import type {
+  ApiApplicationPayload,
+  ApiPaymentResponse,
+  ApiPromoValidateResponse,
+} from '@/core/api';
 
 const ngn = (n: number) => 'NGN ' + n.toLocaleString('en-NG');
 const fdate = (s: string) =>
@@ -107,6 +121,7 @@ interface ApplyFormState {
 
 interface AppliedRecord extends ApplyFormState {
   ref: string;
+  paymentRef?: string;
   kind: 'paid' | 'scholarship';
   method?: string;
   paidAt?: string;
@@ -192,13 +207,44 @@ export default function ApplyPage() {
   const [promoText, setPromoText] = useState('');
   const [promoErr, setPromoErr] = useState('');
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [applicationRef, setApplicationRef] = useState('');
+  const [activePayment, setActivePayment] = useState<ApiPaymentResponse | null>(null);
+  const [promoData, setPromoData] = useState<ApiPromoValidateResponse | null>(null);
+  const [isFetchingReceipt, setIsFetchingReceipt] = useState(false);
 
   const { data: apiProgrammesPage } = useProgrammesQuery({ per_page: 50 });
+  const { data: apiCategories } = useProgrammeCategoriesQuery();
   const { data: apiScholarships } = useScholarshipsQuery();
+  const { data: apiProgDetail } = useProgrammeDetailQuery(A.t || undefined);
   const {
     mutateAsync: submitApplication,
     isPending: isSubmitting,
   } = useSubmitApplicationMutation();
+  const {
+    mutateAsync: validatePromo,
+    isPending: isValidatingPromo,
+  } = useValidatePromoMutation();
+  const {
+    mutateAsync: initiatePayment,
+    isPending: isInitiatingPayment,
+  } = useInitiatePaymentMutation();
+  const {
+    mutateAsync: markTransferMade,
+    isPending: isMarkingTransfer,
+  } = useMarkTransferMadeMutation();
+  const {
+    mutateAsync: verifyPayment,
+    isPending: isVerifyingPayment,
+  } = useVerifyPaymentMutation();
+
+  const {
+    data: polledPayment,
+    refetch: refetchPaymentStatus,
+    isFetching: isCheckingStatus,
+  } = usePaymentStatusQuery(activePayment?.reference, A.email.trim(), {
+    enabled: false,
+    refetchInterval: false,
+  });
 
   const liveSeatsMap = useMemo(() => {
     const map: Record<string, number> = { ...SEATS };
@@ -438,13 +484,20 @@ export default function ApplyPage() {
             kind: 'scholarship',
           };
           setApplied(rec);
+          setApplicationRef('');
+          setActivePayment(null);
+          setPromoData(null);
           setA(freshApply());
           window.scrollTo(0, 0);
           showToast('Application submitted');
         } else {
+          setApplicationRef(serverRef);
+          setActivePayment(null);
+          setPromoData(null);
           setA((prev) => ({
             ...prev,
             step: 5,
+            disc: null,
             pay: { method: '', deadline: 0, state: 'idle', ref: serverRef },
           }));
           window.scrollTo(0, 0);
@@ -497,23 +550,148 @@ export default function ApplyPage() {
     window.scrollTo(0, 0);
   };
 
-  const finishPayment = (method: string) => {
+  const finishPayment = (
+    method: string,
+    paymentRes?: ApiPaymentResponse | null,
+    overrideForm?: ApplyFormState,
+  ) => {
+    const form = overrideForm || A;
+    const paidAmount =
+      paymentRes && typeof paymentRes.amount_due_kobo === 'number'
+        ? Math.round(paymentRes.amount_due_kobo / 100)
+        : payDue(form);
+    const paidDiscount =
+      paymentRes && typeof paymentRes.discount_kobo === 'number'
+        ? Math.round(paymentRes.discount_kobo / 100)
+        : discountOf(form);
+
     setApplied({
-      ...A,
-      ref: A.pay.ref || 'TFN-' + String(Math.floor(10000 + Math.random() * 90000)),
+      ...form,
+      ref:
+        paymentRes?.application_reference ||
+        applicationRef ||
+        form.pay.ref ||
+        'TFN-' + String(Math.floor(10000 + Math.random() * 90000)),
+      paymentRef: paymentRes?.reference || activePayment?.reference,
       kind: 'paid',
       method,
-      paidAt: new Date().toLocaleString('en-GB'),
-      amount: payDue(A),
-      discount: discountOf(A),
+      paidAt: paymentRes?.paid_at
+        ? new Date(paymentRes.paid_at).toLocaleString('en-GB')
+        : new Date().toLocaleString('en-GB'),
+      amount: paidAmount,
+      discount: paidDiscount,
     });
+    sessionStorage.removeItem('tfn_pending_payment');
+    setApplicationRef('');
+    setActivePayment(null);
+    setPromoData(null);
     setA(freshApply());
     window.scrollTo(0, 0);
     showToast('Payment confirmed');
   };
 
-  const downloadReceipt = () => {
-    if (!applied) return;
+  // Handle manual payment status check result (used by Bank Transfer "Check payment status")
+  useEffect(() => {
+    if (!polledPayment) return;
+    setActivePayment(polledPayment);
+    if (['paid', 'confirmed', 'success'].includes(polledPayment.status)) {
+      finishPayment(
+        polledPayment.method === 'transfer' ? 'Bank transfer' : 'Online payment',
+        polledPayment,
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polledPayment]);
+
+  const handleVerifyOnlinePayment = async (
+    paymentRef: string,
+    email: string,
+    overrideForm?: ApplyFormState,
+  ) => {
+    try {
+      const verified = await verifyPayment({ paymentReference: paymentRef, email });
+      setActivePayment(verified);
+      if (['paid', 'confirmed', 'success'].includes(verified.status)) {
+        finishPayment('Online payment', verified, overrideForm);
+      } else {
+        setA((prev) => ({
+          ...(overrideForm || prev),
+          step: 5,
+          pay: {
+            method: 'online',
+            state: 'verifying',
+            deadline: 0,
+            ref: verified.reference || paymentRef,
+          },
+        }));
+        showToast(`Payment status: ${verified.status}`);
+      }
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string };
+      setA((prev) => ({
+        ...(overrideForm || prev),
+        step: 5,
+        pay: {
+          method: 'online',
+          state: 'verifying',
+          deadline: 0,
+          ref: paymentRef,
+        },
+      }));
+      showToast(apiErr?.message || 'Could not verify payment yet. Please click Verify payment.');
+    }
+  };
+
+  // Handle Paystack callback return (`?reference=...` or `?trxref=...`)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlRef = params.get('reference') || params.get('trxref');
+    const savedRaw = sessionStorage.getItem('tfn_pending_payment');
+    if (!urlRef && !savedRaw) return;
+    if (!savedRaw) return;
+
+    let saved: { form: ApplyFormState; paymentRef: string; applicationRef: string } | null = null;
+    try {
+      saved = JSON.parse(savedRaw);
+    } catch {
+      sessionStorage.removeItem('tfn_pending_payment');
+      return;
+    }
+    if (!saved) return;
+
+    const refToCheck = urlRef || saved.paymentRef;
+    if (!refToCheck || !saved.form?.email) return;
+
+    if (urlRef) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    setApplicationRef(saved.applicationRef);
+    handleVerifyOnlinePayment(refToCheck, saved.form.email, saved.form);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const downloadReceipt = async () => {
+    if (!applied || isFetchingReceipt) return;
+    if (applied.paymentRef && applied.email) {
+      setIsFetchingReceipt(true);
+      try {
+        const signedUrl = await paymentService.getReceiptUrl(
+          applied.paymentRef,
+          applied.email,
+        );
+        if (signedUrl) {
+          window.open(signedUrl, '_blank', 'noopener,noreferrer');
+          showToast('Opening official receipt...');
+          setIsFetchingReceipt(false);
+          return;
+        }
+      } catch {
+        // Fallback to local HTML receipt if signed URL endpoint is unreachable
+      } finally {
+        setIsFetchingReceipt(false);
+      }
+    }
     const el = document.createElement('a');
     el.href = URL.createObjectURL(new Blob([receiptHTML(applied)], { type: 'text/html' }));
     el.download = `TFN-Academy-receipt-${applied.ref}.html`;
@@ -523,6 +701,50 @@ export default function ApplyPage() {
     setTimeout(() => URL.revokeObjectURL(el.href), 2000);
     showToast('Receipt downloaded');
   };
+
+  const t = useMemo(() => {
+    if (apiProgDetail && apiProgDetail.slug === A.t) {
+      return mapApiDetailToTrack(apiProgDetail);
+    }
+    return A.t ? findTrack(A.t) : undefined;
+  }, [apiProgDetail, A.t]);
+
+  const categoryNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (apiCategories && apiCategories.length > 0) {
+      for (const c of apiCategories) {
+        map[c.slug] = c.name;
+      }
+    }
+    return map;
+  }, [apiCategories]);
+
+  const progOptsSeats = useMemo(() => {
+    if (apiProgrammesPage?.data && apiProgrammesPage.data.length > 0) {
+      return apiProgrammesPage.data.map((p) => {
+        const seats = p.seats_available;
+        return {
+          v: p.slug,
+          l: p.short_name,
+          ic: p.icon || 'blocks',
+          g: categoryNameMap[p.category] || findCategory(p.category)?.name || p.category,
+          r: `${seats} seats left`,
+          rc: seats < 8 ? 'low' : '',
+        };
+      });
+    }
+    return TRACKS.map((tr) => {
+      const seats = liveSeatsMap[tr.slug] ?? seatsOf(tr.slug);
+      return {
+        v: tr.slug,
+        l: tr.short,
+        ic: tr.ic,
+        g: categoryNameMap[tr.cat] || findCategory(tr.cat)?.name,
+        r: `${seats} seats left`,
+        rc: seats < 8 ? 'low' : '',
+      };
+    });
+  }, [apiProgrammesPage?.data, categoryNameMap, liveSeatsMap]);
 
   if (applied) {
     const t = findTrack(applied.t) || TRACKS[0];
@@ -672,9 +894,6 @@ export default function ApplyPage() {
                   </button>
                 </div>
               </div>
-              <div className="review-only">
-                <OdTag id="OD-04" />
-              </div>
             </div>
           </div>
         </section>
@@ -786,22 +1005,24 @@ export default function ApplyPage() {
       ? ['Course', 'Your details', 'Environment', 'Review']
       : ['Course', 'Your details', 'Environment', 'Review', 'Payment'];
   const pct = Math.round((A.step / st.length) * 100);
-  const t = A.t ? findTrack(A.t) : undefined;
+  const selectedSeats = t
+    ? apiProgDetail?.slug === t.slug && apiProgDetail.seats_available !== undefined
+      ? apiProgDetail.seats_available
+      : (liveSeatsMap[t.slug] ?? seatsOf(t.slug))
+    : 0;
+  const liveFeeNaira =
+    apiProgDetail?.slug === A.t && typeof apiProgDetail?.fee_kobo === 'number'
+      ? Math.round(apiProgDetail.fee_kobo / 100)
+      : null;
+  const selectedFeeLabel =
+    apiProgDetail?.slug === A.t && apiProgDetail?.fee
+      ? apiProgDetail.fee
+      : liveFeeNaira !== null
+        ? ngn(liveFeeNaira)
+        : '—';
   const sc = A.type === 'scholarship' ? liveSchols.find((x) => x.id === A.schol) : undefined;
   const age = ageOf(A.dob);
   const minor = age !== null && age < 18;
-
-  const progOptsSeats = TRACKS.map((tr) => {
-    const seats = liveSeatsMap[tr.slug] ?? seatsOf(tr.slug);
-    return {
-      v: tr.slug,
-      l: tr.short,
-      ic: tr.ic,
-      g: findCategory(tr.cat)?.name,
-      r: `${seats} seats left`,
-      rc: seats < 8 ? 'low' : '',
-    };
-  });
 
   const nextLabel =
     A.step === 4
@@ -810,19 +1031,241 @@ export default function ApplyPage() {
         : 'Continue to payment'
       : 'Continue';
 
-  const handleApplyPromo = () => {
-    if (['processing', 'verifying'].includes(A.pay.state)) return;
+  const liveDiscountNaira =
+    activePayment && typeof activePayment.discount_kobo === 'number'
+      ? Math.round(activePayment.discount_kobo / 100)
+      : promoData && typeof promoData.discount_kobo === 'number'
+        ? Math.round(promoData.discount_kobo / 100)
+        : discountOf(A);
+
+  const liveTotalDueNaira =
+    activePayment && typeof activePayment.amount_due_kobo === 'number'
+      ? Math.round(activePayment.amount_due_kobo / 100)
+      : promoData && typeof promoData.total_due_kobo === 'number'
+        ? Math.round(promoData.total_due_kobo / 100)
+        : liveFeeNaira !== null
+          ? Math.max(0, liveFeeNaira - liveDiscountNaira)
+          : null;
+
+  const liveTotalDueLabel =
+    activePayment?.amount_due ||
+    promoData?.total_due ||
+    (liveTotalDueNaira !== null ? ngn(liveTotalDueNaira) : '—');
+
+  const liveDiscountLabel =
+    activePayment?.discount ||
+    promoData?.discount ||
+    (liveDiscountNaira > 0 ? ngn(liveDiscountNaira) : '');
+
+  const handleApplyPromo = async () => {
+    if (['processing', 'verifying'].includes(A.pay.state) || isValidatingPromo) return;
     const code = promoText.trim().toUpperCase();
-    const p = PROMOS[code];
     if (!code) {
       setPromoErr('Enter a discount code.');
-    } else if (!p) {
+      return;
+    }
+
+    const appRef = applicationRef || A.pay.ref;
+    if (appRef) {
+      try {
+        const res = await validatePromo({
+          code,
+          application_reference: appRef,
+        });
+        setPromoData(res);
+        setA((prev) => ({
+          ...prev,
+          disc: {
+            code: res.code,
+            label: res.label,
+            pct: res.type === 'percent' ? res.value : undefined,
+            flat: res.type !== 'percent' ? Math.round(res.discount_kobo / 100) : undefined,
+          },
+        }));
+        setPromoErr('');
+        setPromoText('');
+        showToast(`${res.code} applied: ${res.label}`);
+      } catch (error: unknown) {
+        const apiErr = error as { message?: string };
+        setPromoErr(apiErr?.message || 'That code isn’t valid or has expired.');
+      }
+      return;
+    }
+
+    const p = PROMOS[code];
+    if (!p) {
       setPromoErr('That code isn’t valid or has expired.');
     } else {
       setA((prev) => ({ ...prev, disc: { code, ...p } }));
       setPromoErr('');
       setPromoText('');
       showToast(`${code} applied: ${p.label}`);
+    }
+  };
+
+  const handleInitiateTransfer = async () => {
+    const appRef = applicationRef || A.pay.ref;
+    if (!appRef) {
+      showToast('Application reference is missing. Please go back and submit again.');
+      return;
+    }
+
+    setA((prev) => ({
+      ...prev,
+      pay: { ...prev.pay, method: 'transfer', state: 'processing' },
+    }));
+
+    try {
+      const res = await initiatePayment({
+        applicationReference: appRef,
+        payload: {
+          method: 'transfer',
+          promo_code: A.disc?.code || undefined,
+          callback_url: `${window.location.origin}/apply`,
+          email: A.email.trim(),
+        },
+      });
+      setActivePayment(res);
+      const deadline = res.expires_at
+        ? new Date(res.expires_at).getTime()
+        : Date.now() + (res.seconds_remaining ?? PAY_WINDOW_MIN * 60) * 1000;
+      setNowMs(Date.now());
+      setA((prev) => ({
+        ...prev,
+        pay: {
+          method: 'transfer',
+          state: res.status === 'awaiting_verification' ? 'verifying' : 'waiting',
+          deadline,
+          ref: res.narration || res.reference,
+        },
+      }));
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string };
+      setA((prev) => ({
+        ...prev,
+        pay: { ...prev.pay, method: '', state: 'idle' },
+      }));
+      showToast(apiErr?.message || 'Could not initiate bank transfer. Please try again.');
+    }
+  };
+
+  const handleInitiateOnline = async () => {
+    const appRef = applicationRef || A.pay.ref;
+    if (!appRef) {
+      showToast('Application reference is missing. Please go back and submit again.');
+      return;
+    }
+
+    setA((prev) => ({
+      ...prev,
+      pay: { ...prev.pay, method: 'online', state: 'processing' },
+    }));
+
+    try {
+      const res = await initiatePayment({
+        applicationReference: appRef,
+        payload: {
+          method: 'online',
+          promo_code: A.disc?.code || undefined,
+          callback_url: `${window.location.origin}/apply`,
+          email: A.email.trim(),
+        },
+      });
+      setActivePayment(res);
+
+      if (['paid', 'confirmed', 'success'].includes(res.status)) {
+        finishPayment('Online payment', res);
+        return;
+      }
+
+      const checkoutUrl =
+        res.authorization_url || res.checkout_url || res.payment_url;
+      let accessCode = res.access_code || null;
+      if (!accessCode && checkoutUrl) {
+        const match = checkoutUrl.match(/checkout\.paystack\.com\/([A-Za-z0-9]+)/i);
+        if (match?.[1]) accessCode = match[1];
+      }
+
+      if (accessCode) {
+        try {
+          const popup = new PaystackPop();
+          popup.resumeTransaction(accessCode, {
+            onSuccess: () => {
+              setA((prev) => ({
+                ...prev,
+                pay: { ...prev.pay, method: 'online', state: 'verifying', ref: res.reference },
+              }));
+              handleVerifyOnlinePayment(res.reference, A.email.trim());
+            },
+            onCancel: () => {
+              setA((prev) => ({
+                ...prev,
+                pay: { ...prev.pay, method: 'online', state: 'idle' },
+              }));
+              showToast('Payment cancelled. You can try again anytime.');
+            },
+            onError: () => {
+              setA((prev) => ({
+                ...prev,
+                pay: { ...prev.pay, method: 'online', state: 'idle' },
+              }));
+              showToast('Payment window could not load. Please try again.');
+            },
+          });
+          return;
+        } catch {
+          // Fall through to hosted checkout redirect if inline popup fails
+        }
+      }
+
+      if (checkoutUrl) {
+        sessionStorage.setItem(
+          'tfn_pending_payment',
+          JSON.stringify({
+            form: A,
+            paymentRef: res.reference,
+            applicationRef: appRef,
+          }),
+        );
+        window.location.href = checkoutUrl;
+        return;
+      }
+
+      setA((prev) => ({
+        ...prev,
+        pay: { ...prev.pay, method: 'online', state: 'verifying', ref: res.reference },
+      }));
+      handleVerifyOnlinePayment(res.reference, A.email.trim());
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string };
+      setA((prev) => ({
+        ...prev,
+        pay: { ...prev.pay, method: 'online', state: 'idle' },
+      }));
+      showToast(apiErr?.message || 'Could not start online payment. Please try again.');
+    }
+  };
+
+  const handleMarkTransferMade = async () => {
+    if (!activePayment?.reference || isMarkingTransfer) return;
+    try {
+      const res = await markTransferMade({
+        paymentReference: activePayment.reference,
+        email: A.email.trim(),
+      });
+      setActivePayment(res);
+      if (['paid', 'confirmed', 'success'].includes(res.status)) {
+        finishPayment('Bank transfer', res);
+      } else {
+        setA((prev) => ({
+          ...prev,
+          pay: { ...prev.pay, state: 'verifying' },
+        }));
+        showToast('Transfer noted — awaiting verification');
+      }
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string };
+      showToast(apiErr?.message || 'Could not confirm transfer. Please try again.');
     }
   };
 
@@ -1005,11 +1448,11 @@ export default function ApplyPage() {
                           <div className="pv">
                             <div className="chips">
                               <span
-                                className={`pill ${seatsOf(t.slug) < 8 ? 'ac' : ''}`.trim()}
+                                className={`pill ${selectedSeats < 8 ? 'ac' : ''}`.trim()}
                               >
                                 <Icon name="users" />
-                                {seatsOf(t.slug)} seats available
-                                {seatsOf(t.slug) < 8 ? ', filling fast' : ''}
+                                {selectedSeats} seats available
+                                {selectedSeats < 8 ? ', filling fast' : ''}
                               </span>
                               <span className="pill">
                                 {t.levels.length === 2
@@ -1100,13 +1543,10 @@ export default function ApplyPage() {
                   <div className="callout" style={{ marginTop: 24 }}>
                     <Icon name="info" />
                     <span>
-                      <b>Standard course fee: {ngn(COURSE_FEE)}</b> for every programme.{' '}
+                      <b>Standard course fee: {selectedFeeLabel}</b> for every programme.{' '}
                       {A.type === 'paid'
                         ? 'You will pay after reviewing your application.'
-                        : 'Scholarships cover part or all of this fee.'}{' '}
-                      <span className="review-only">
-                        <OdTag id="OD-04" />
-                      </span>
+                        : 'Scholarships cover part or all of this fee.'}
                     </span>
                   </div>
                 </>
@@ -1626,26 +2066,34 @@ export default function ApplyPage() {
                     <div className="costbox">
                       <div>
                         <span className="muted">Standard course fee</span>
-                        <b>{ngn(COURSE_FEE)}</b>
+                        <b>{selectedFeeLabel}</b>
                       </div>
                       <div>
                         <span className="muted">If awarded ({covShort(sc)})</span>
-                        <b>{ngn(Math.round((COURSE_FEE * sc.pct) / 100))} covered</b>
+                        <b>
+                          {liveFeeNaira !== null
+                            ? `${ngn(Math.round((liveFeeNaira * sc.pct) / 100))} covered`
+                            : '—'}
+                        </b>
                       </div>
                       <div>
                         <span className="muted">Balance payable</span>
-                        <b>{ngn(COURSE_FEE - Math.round((COURSE_FEE * sc.pct) / 100))}</b>
+                        <b>
+                          {liveFeeNaira !== null
+                            ? ngn(liveFeeNaira - Math.round((liveFeeNaira * sc.pct) / 100))
+                            : '—'}
+                        </b>
                       </div>
                     </div>
                   ) : (
                     <div className="costbox">
                       <div>
                         <span className="muted">Course fee</span>
-                        <b>{ngn(COURSE_FEE)}</b>
+                        <b>{selectedFeeLabel}</b>
                       </div>
                       <div>
                         <span className="muted">Total due next</span>
-                        <b>{ngn(COURSE_FEE)}</b>
+                        <b>{selectedFeeLabel}</b>
                       </div>
                     </div>
                   )}
@@ -1674,17 +2122,17 @@ export default function ApplyPage() {
                     </div>
                     <div>
                       <span className="muted">Course fee</span>
-                      <b>{ngn(COURSE_FEE)}</b>
+                      <b>{activePayment?.fee || promoData?.fee || selectedFeeLabel}</b>
                     </div>
-                    {discountOf(A) > 0 && A.disc ? (
+                    {liveDiscountNaira > 0 && A.disc ? (
                       <div className="disc">
                         <span>Discount ({A.disc.code})</span>
-                        <b>−{ngn(discountOf(A))}</b>
+                        <b>−{liveDiscountLabel}</b>
                       </div>
                     ) : null}
                     <div>
                       <span className="muted">Total due</span>
-                      <b>{ngn(payDue(A))}</b>
+                      <b>{liveTotalDueLabel}</b>
                     </div>
                   </div>
 
@@ -1701,7 +2149,11 @@ export default function ApplyPage() {
                         <button
                           type="button"
                           className="linkbtn small"
-                          onClick={() => updateField('disc', null)}
+                          disabled={Boolean(activePayment)}
+                          onClick={() => {
+                            setPromoData(null);
+                            updateField('disc', null);
+                          }}
                         >
                           Remove
                         </button>
@@ -1724,8 +2176,17 @@ export default function ApplyPage() {
                             autoComplete="off"
                             aria-label="Discount code"
                           />
-                          <button type="button" className="btn btn-line" onClick={handleApplyPromo}>
-                            Apply
+                          <button
+                            type="button"
+                            className="btn btn-line"
+                            disabled={isValidatingPromo}
+                            onClick={handleApplyPromo}
+                          >
+                            {isValidatingPromo ? (
+                              <Spinner size="xs" variant="brand" label="Validating..." />
+                            ) : (
+                              'Apply'
+                            )}
                           </button>
                         </div>
                         {promoErr ? (
@@ -1736,9 +2197,6 @@ export default function ApplyPage() {
                         ) : null}
                       </>
                     )}
-                    <div className="review-only small muted" style={{ marginTop: 8 }}>
-                      Demo codes: TFN10, EARLYBIRD, WELCOME5000
-                    </div>
                   </div>
 
                   <div className="sub">Choose how to pay</div>
@@ -1761,18 +2219,10 @@ export default function ApplyPage() {
                         key={k}
                         type="button"
                         className={`opt ${A.pay.method === k ? 'on' : ''}`.trim()}
+                        disabled={isInitiatingPayment}
                         onClick={() => {
                           if (k === 'transfer') {
-                            setNowMs(Date.now());
-                            setA((prev) => ({
-                              ...prev,
-                              pay: {
-                                method: 'transfer',
-                                state: 'waiting',
-                                deadline: Date.now() + PAY_WINDOW_MIN * 60000,
-                                ref: 'TFN-' + String(Math.floor(10000 + Math.random() * 90000)),
-                              },
-                            }));
+                            handleInitiateTransfer();
                           } else {
                             setA((prev) => ({
                               ...prev,
@@ -1794,45 +2244,86 @@ export default function ApplyPage() {
 
                   <div style={{ marginTop: 20 }}>
                     {A.pay.method === 'online' &&
-                      (A.pay.state === 'processing' ? (
+                      (A.pay.state === 'processing' || isInitiatingPayment ? (
                         <div className="paybox center">
-                          <span className="spin" />
-                          <b>Processing your payment…</b>
+                          <Spinner size="md" variant="brand" label="Preparing secure checkout..." />
+                          <b>Connecting to payment gateway…</b>
                           <span className="muted small">Please don’t close this page.</span>
+                        </div>
+                      ) : A.pay.state === 'verifying' ? (
+                        <div className="paybox center">
+                          {isVerifyingPayment ? (
+                            <Spinner size="md" variant="brand" label="Verifying payment..." />
+                          ) : (
+                            <div className="okmark" style={{ marginBottom: 4 }}>
+                              <Icon name="check" />
+                            </div>
+                          )}
+                          <b>
+                            {isVerifyingPayment
+                              ? 'Verifying your payment…'
+                              : 'Payment submitted — awaiting confirmation'}
+                          </b>
+                          <span className="muted small" style={{ maxWidth: 460 }}>
+                            Reference: <b>{activePayment?.reference || A.pay.ref}</b> · Status:{' '}
+                            <b>{activePayment?.status || 'pending'}</b>
+                          </span>
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: 10,
+                              flexWrap: 'wrap',
+                              justifyContent: 'center',
+                              marginTop: 10,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="btn btn-brand btn-sm"
+                              disabled={isVerifyingPayment}
+                              onClick={() => {
+                                const refToVerify = activePayment?.reference || A.pay.ref;
+                                if (refToVerify && A.email.trim()) {
+                                  handleVerifyOnlinePayment(refToVerify, A.email.trim());
+                                }
+                              }}
+                            >
+                              {isVerifyingPayment ? 'Verifying...' : 'Verify payment'}
+                            </button>
+                            <Link className="btn btn-line btn-sm" to="/">
+                              Back to home
+                            </Link>
+                          </div>
                         </div>
                       ) : (
                         <div className="paybox">
                           <div>
                             <b>Secure online payment</b>
                             <p className="muted small">
-                              You will complete your payment with our payment partner. Your seat is
-                              confirmed as soon as it succeeds.
+                              You will complete your payment with Paystack. Your seat is confirmed
+                              as soon as it succeeds.
                             </p>
                           </div>
                           <button
                             type="button"
                             className="btn btn-brand"
-                            onClick={() => {
-                              setA((prev) => ({
-                                ...prev,
-                                pay: { ...prev.pay, state: 'processing' },
-                              }));
-                              setTimeout(() => {
-                                finishPayment('Online payment');
-                              }, 1600);
-                            }}
+                            disabled={isInitiatingPayment}
+                            onClick={handleInitiateOnline}
                           >
                             <Icon name="lock" />
-                            Pay {ngn(payDue(A))} securely
+                            Pay {liveTotalDueLabel} securely
                           </button>
-                          <p className="small muted">
-                            Prototype: the payment gateway is simulated.
-                          </p>
                         </div>
                       ))}
 
                     {A.pay.method === 'transfer' &&
-                      (A.pay.state === 'expired' ? (
+                      (A.pay.state === 'processing' || isInitiatingPayment ? (
+                        <div className="paybox center">
+                          <Spinner size="md" variant="brand" label="Generating transfer details..." />
+                          <b>Preparing your transfer details…</b>
+                          <span className="muted small">Holding your seat for this cohort.</span>
+                        </div>
+                      ) : A.pay.state === 'expired' ? (
                         <div className="vres bad" style={{ marginTop: 0 }}>
                           <div className="vh">
                             <Icon name="timer" />
@@ -1846,19 +2337,7 @@ export default function ApplyPage() {
                             <button
                               type="button"
                               className="btn btn-brand btn-sm"
-                              onClick={() => {
-                                setNowMs(Date.now());
-                                setA((prev) => ({
-                                  ...prev,
-                                  pay: {
-                                    method: 'transfer',
-                                    state: 'waiting',
-                                    deadline: Date.now() + PAY_WINDOW_MIN * 60000,
-                                    ref:
-                                      'TFN-' + String(Math.floor(10000 + Math.random() * 90000)),
-                                  },
-                                }));
-                              }}
+                              onClick={handleInitiateTransfer}
                             >
                               Start a new payment window
                             </button>
@@ -1866,15 +2345,65 @@ export default function ApplyPage() {
                         </div>
                       ) : A.pay.state === 'verifying' ? (
                         <div className="paybox center">
-                          <span className="spin" />
-                          <b>Confirming your payment…</b>
-                          <span className="muted small">This usually takes a moment.</span>
+                          <div className="okmark" style={{ marginBottom: 4 }}>
+                            <Icon name="check" />
+                          </div>
+                          <b>Transfer submitted — awaiting verification</b>
+                          <span className="muted small" style={{ maxWidth: 460 }}>
+                            You’re all set! We’ve notified admissions for payment{' '}
+                            <b>{activePayment?.reference}</b> (narration:{' '}
+                            <b>{activePayment?.narration || A.pay.ref}</b>). Once your transfer is
+                            confirmed, you’ll receive your receipt and cohort onboarding details by
+                            email and WhatsApp.
+                          </span>
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: 10,
+                              flexWrap: 'wrap',
+                              justifyContent: 'center',
+                              marginTop: 12,
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="btn btn-brand btn-sm"
+                              disabled={isCheckingStatus}
+                              onClick={async () => {
+                                const res = await refetchPaymentStatus();
+                                const st = res.data?.status;
+                                if (st && !['paid', 'confirmed', 'success'].includes(st)) {
+                                  showToast('Still awaiting confirmation from admissions.');
+                                }
+                              }}
+                            >
+                              {isCheckingStatus ? (
+                                <>
+                                  <Spinner size="xs" variant="white" label="Checking..." />
+                                  Checking...
+                                </>
+                              ) : (
+                                'Check payment status'
+                              )}
+                            </button>
+                            <Link className="btn btn-line btn-sm" to="/">
+                              Back to home
+                            </Link>
+                          </div>
                         </div>
                       ) : (
                         (() => {
                           const left = Math.max(0, A.pay.deadline - nowMs);
                           const m = Math.floor(left / 60000);
                           const s = Math.floor((left % 60000) / 1000);
+                          const bankName = activePayment?.bank?.bank_name || BANK.bank;
+                          const accountName = activePayment?.bank?.account_name || BANK.name;
+                          const accountNo = activePayment?.bank?.account_number || BANK.no;
+                          const narration = activePayment?.narration || A.pay.ref;
+                          const amountLabel = activePayment?.amount_due || liveTotalDueLabel;
+                          const amountCopy =
+                            liveTotalDueNaira !== null ? String(liveTotalDueNaira) : undefined;
+
                           const renderRow = (k: string, v: string, copyVal?: string) => (
                             <div key={k} className="acct-row">
                               <span className="muted">{k}</span>
@@ -1920,16 +2449,16 @@ export default function ApplyPage() {
                                 <i
                                   id="pbar"
                                   style={{
-                                    width: `${(left / (PAY_WINDOW_MIN * 60000)) * 100}%`,
+                                    width: `${Math.min(100, (left / (PAY_WINDOW_MIN * 60000)) * 100)}%`,
                                   }}
                                 />
                               </div>
                               <div className="acct">
-                                {renderRow('Bank', BANK.bank)}
-                                {renderRow('Account name', BANK.name)}
-                                {renderRow('Account number', BANK.no, BANK.no)}
-                                {renderRow('Amount', ngn(payDue(A)), String(payDue(A)))}
-                                {renderRow('Narration', A.pay.ref, A.pay.ref)}
+                                {renderRow('Bank', bankName)}
+                                {renderRow('Account name', accountName)}
+                                {renderRow('Account number', accountNo, accountNo)}
+                                {renderRow('Amount', amountLabel, amountCopy)}
+                                {renderRow('Narration', narration, narration)}
                               </div>
                               <p className="small muted">
                                 Use the narration above so we can match your payment quickly. Your
@@ -1938,25 +2467,24 @@ export default function ApplyPage() {
                               <button
                                 type="button"
                                 className="btn btn-brand"
-                                onClick={() => {
-                                  setA((prev) => ({
-                                    ...prev,
-                                    pay: { ...prev.pay, state: 'verifying' },
-                                  }));
-                                  setTimeout(() => {
-                                    finishPayment('Bank transfer');
-                                  }, 2000);
-                                }}
+                                disabled={isMarkingTransfer}
+                                onClick={handleMarkTransferMade}
                               >
-                                I’ve made the transfer <Icon name="arrow-right" className="arr" />
+                                {isMarkingTransfer ? (
+                                  <>
+                                    <Spinner size="xs" variant="white" label="Submitting..." />
+                                    Confirming...
+                                  </>
+                                ) : (
+                                  <>
+                                    I’ve made the transfer <Icon name="arrow-right" className="arr" />
+                                  </>
+                                )}
                               </button>
                             </div>
                           );
                         })()
                       ))}
-                  </div>
-                  <div className="review-only">
-                    <OdTag id="OD-04" />
                   </div>
                 </>
               )}

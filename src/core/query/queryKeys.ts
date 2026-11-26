@@ -15,8 +15,9 @@ export const queryKeys = {
   },
   talents: {
     all: ['talents'] as const,
-    list: (niche?: string) => [...queryKeys.talents.all, 'list', { niche }] as const,
-    detail: (id: string) => [...queryKeys.talents.all, 'detail', id] as const,
+    list: (params?: Record<string, unknown>) =>
+      [...queryKeys.talents.all, 'list', params ?? {}] as const,
+    detail: (code: string) => [...queryKeys.talents.all, 'detail', code] as const,
   },
   applications: {
     all: ['applications'] as const,
@@ -24,7 +25,9 @@ export const queryKeys = {
   },
   hub: {
     all: ['hub'] as const,
+    overview: () => [...queryKeys.hub.all, 'overview'] as const,
     spaces: () => [...queryKeys.hub.all, 'spaces'] as const,
+    spaceDetail: (slug: string) => [...queryKeys.hub.all, 'space', slug] as const,
   },
   faqs: {
     all: ['faqs'] as const,
@@ -35,5 +38,31 @@ export const queryKeys = {
     list: () => [...queryKeys.scholarships.all, 'list'] as const,
     detail: (code: string, programmeSlug?: string) =>
       [...queryKeys.scholarships.all, 'detail', code, programmeSlug ?? null] as const,
+  },
+  payments: {
+    all: ['payments'] as const,
+    status: (paymentRef: string, email: string) =>
+      [...queryKeys.payments.all, 'status', paymentRef, email] as const,
+  },
+  kids: {
+    all: ['kids'] as const,
+    content: () => [...queryKeys.kids.all, 'content'] as const,
+  },
+  corporate: {
+    all: ['corporate'] as const,
+    overview: () => [...queryKeys.corporate.all, 'overview'] as const,
+  },
+  blog: {
+    all: ['blog'] as const,
+    categories: () => [...queryKeys.blog.all, 'categories'] as const,
+    list: (params?: Record<string, unknown>) =>
+      [...queryKeys.blog.all, 'list', params ?? {}] as const,
+    detail: (slug: string) => [...queryKeys.blog.all, 'detail', slug] as const,
+  },
+  careers: {
+    all: ['careers'] as const,
+    roles: (department?: string) =>
+      [...queryKeys.careers.all, 'roles', department ?? 'all'] as const,
+    roleDetail: (code: string) => [...queryKeys.careers.all, 'role', code] as const,
   },
 } as const;

@@ -1,9 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CAREERS, EMAIL_REGEX } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
-import { CustomDropdown, OdTag, Photo } from '@/shared/components/ui/Illustrations';
+import { CustomDropdown, Photo } from '@/shared/components/ui/Illustrations';
+import { Skeleton, Spinner } from '@/shared/components/ui/Loading';
 import { useToast } from '@/shared/context/ToastContext';
+import {
+  useCareerApplicationMutation,
+  useCareerRoleDetailQuery,
+  useCareerRolesQuery,
+} from '@/hooks/queries';
+import type { ApiCareerApplicationResponse } from '@/core/api';
 
 const HIRE_STEPS: Array<[title: string, desc: string]> = [
   ['Apply', 'Send your details and tell us about yourself.'],
@@ -11,6 +18,8 @@ const HIRE_STEPS: Array<[title: string, desc: string]> = [
   ['Interview', 'Meet the team and, for teaching roles, run a short demo session.'],
   ['Offer', 'Receive an offer and join our onboarding.'],
 ];
+
+const MAX_CV_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const INITIAL_CAREER = {
   name: '',
@@ -22,26 +31,113 @@ const INITIAL_CAREER = {
   msg: '',
 };
 
+interface DisplayRole {
+  code: string;
+  title: string;
+  department: string;
+  employmentType: string;
+  location: string;
+  summary: string;
+  responsibilities: string[];
+  requirements: string[];
+}
+
 export default function CareersPage() {
   const { showToast } = useToast();
   const [careerDept, setCareerDept] = useState('all');
   const [openRoles, setOpenRoles] = useState<Record<string, boolean>>({});
+  const [lastExpandedCode, setLastExpandedCode] = useState<string>('');
   const [form, setForm] = useState(INITIAL_CAREER);
+  const [cvFile, setCvFile] = useState<File | null>(null);
   const [err, setErr] = useState<Record<string, string>>({});
-  const [sent, setSent] = useState(false);
+  const [submitErr, setSubmitErr] = useState('');
+  const [submitted, setSubmitted] = useState<ApiCareerApplicationResponse | null>(null);
 
-  const depts = ['all', ...Array.from(new Set(CAREERS.map((r) => r.dept)))];
-  const filteredRoles = CAREERS.filter((r) => careerDept === 'all' || r.dept === careerDept);
+  const { data: allApiRoles, isLoading: isRolesLoading } = useCareerRolesQuery('all');
+  const { data: filteredApiRoles, isFetching: isDeptFetching } = useCareerRolesQuery(careerDept);
+  const { data: expandedRoleDetail } = useCareerRoleDetailQuery(lastExpandedCode || undefined);
+  const { mutateAsync: submitCareerApp, isPending: isSubmitting } =
+    useCareerApplicationMutation();
 
-  const roleOpts = [
-    ...CAREERS.map((r) => ({ v: r.id, l: r.t, g: 'Open roles' })),
-    { v: 'general', l: 'General application', g: 'Other' },
-  ];
+  const allRoles = useMemo<DisplayRole[]>(() => {
+    if (allApiRoles && allApiRoles.length > 0) {
+      return [...allApiRoles]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((r) => ({
+          code: r.code,
+          title: r.title,
+          department: r.department,
+          employmentType: r.employment_type,
+          location: r.location,
+          summary: r.summary,
+          responsibilities: r.responsibilities || [],
+          requirements: r.requirements || [],
+        }));
+    }
+    return CAREERS.map((r) => ({
+      code: r.id,
+      title: r.t,
+      department: r.dept,
+      employmentType: r.type,
+      location: r.loc,
+      summary: r.sum,
+      responsibilities: r.resp,
+      requirements: r.req,
+    }));
+  }, [allApiRoles]);
 
-  const selectedRole = CAREERS.find((r) => r.id === form.role);
+  const depts = useMemo(
+    () => ['all', ...Array.from(new Set(allRoles.map((r) => r.department)))],
+    [allRoles],
+  );
+
+  const filteredRoles = useMemo<DisplayRole[]>(() => {
+    const source =
+      filteredApiRoles && filteredApiRoles.length > 0
+        ? [...filteredApiRoles]
+            .sort((a, b) => a.sort_order - b.sort_order)
+            .map((r) => ({
+              code: r.code,
+              title: r.title,
+              department: r.department,
+              employmentType: r.employment_type,
+              location: r.location,
+              summary: r.summary,
+              responsibilities: r.responsibilities || [],
+              requirements: r.requirements || [],
+            }))
+        : allRoles.filter((r) => careerDept === 'all' || r.department === careerDept);
+
+    if (!expandedRoleDetail) return source;
+    return source.map((r) =>
+      r.code === expandedRoleDetail.code
+        ? {
+            code: expandedRoleDetail.code,
+            title: expandedRoleDetail.title,
+            department: expandedRoleDetail.department,
+            employmentType: expandedRoleDetail.employment_type,
+            location: expandedRoleDetail.location,
+            summary: expandedRoleDetail.summary,
+            responsibilities: expandedRoleDetail.responsibilities || [],
+            requirements: expandedRoleDetail.requirements || [],
+          }
+        : r,
+    );
+  }, [allRoles, careerDept, expandedRoleDetail, filteredApiRoles]);
+
+  const roleOpts = useMemo(
+    () => [
+      ...allRoles.map((r) => ({ v: r.code, l: r.title, g: 'Open roles' })),
+      { v: 'general', l: 'General application', g: 'Other' },
+    ],
+    [allRoles],
+  );
+
+  const selectedRole = allRoles.find((r) => r.code === form.role);
 
   const updateField = (key: keyof typeof INITIAL_CAREER, val: string) => {
     setForm((prev) => ({ ...prev, [key]: val }));
+    setSubmitErr('');
     setErr((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
@@ -50,7 +146,22 @@ export default function CareersPage() {
     });
   };
 
-  const handleSubmit = () => {
+  const focusFirstError = () => {
+    setTimeout(() => {
+      const firstErr = document.querySelector<HTMLElement>(
+        '.fld.err .inp, .fld.err .dd-btn, .check.err input',
+      );
+      if (firstErr) {
+        firstErr.scrollIntoView({ block: 'center' });
+        firstErr.focus({ preventScroll: true });
+      }
+    }, 20);
+  };
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+    setSubmitErr('');
+
     const e: Record<string, string> = {};
     if (form.name.trim().split(/\s+/).length < 2) {
       e.name = 'Enter your first and last name.';
@@ -64,28 +175,58 @@ export default function CareersPage() {
     if (!form.role) {
       e.role = 'Choose a role or send a general application.';
     }
+    if (form.link.trim() && !/^https?:\/\//i.test(form.link.trim())) {
+      e.link = 'Enter a valid URL starting with https:// or http://.';
+    }
+    if (cvFile && cvFile.size > MAX_CV_BYTES) {
+      e.cv = 'CV file must be 5 MB or smaller.';
+    }
     if (form.msg.trim().length < 10) {
-      e.msg = 'Tell us a little about yourself.';
+      e.msg = 'Tell us a little about yourself (at least 10 characters).';
     }
 
     setErr(e);
-    if (!Object.keys(e).length) {
-      setSent(true);
+    if (Object.keys(e).length > 0) {
+      focusFirstError();
+      return;
+    }
+
+    try {
+      const res = await submitCareerApp({
+        role_code: form.role,
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.replace(/[\s-]/g, ''),
+        link: form.link.trim() || undefined,
+        cv: cvFile,
+        message: form.msg.trim(),
+        consent: true,
+      });
+      setSubmitted(res || {});
       showToast('Application sent');
       setTimeout(() => {
         const f = document.getElementById('cform');
         if (f) f.scrollIntoView({ block: 'center' });
       }, 20);
-    } else {
-      setTimeout(() => {
-        const firstErr = document.querySelector<HTMLElement>(
-          '.fld.err .inp, .fld.err .dd-btn, .check.err input',
-        );
-        if (firstErr) {
-          firstErr.scrollIntoView({ block: 'center' });
-          firstErr.focus({ preventScroll: true });
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string; errors?: Record<string, string[]> };
+      if (apiErr?.errors && Object.keys(apiErr.errors).length > 0) {
+        const fieldMap: Record<string, string> = {
+          role_code: 'role',
+          message: 'msg',
+        };
+        const mapped: Record<string, string> = {};
+        for (const [k, msgs] of Object.entries(apiErr.errors)) {
+          if (msgs && msgs.length > 0) {
+            mapped[fieldMap[k] || k] = msgs[0];
+          }
         }
-      }, 20);
+        setErr(mapped);
+        focusFirstError();
+      }
+      const msg = apiErr?.message || 'Could not submit application. Please try again.';
+      setSubmitErr(msg);
+      showToast(msg);
     }
   };
 
@@ -129,9 +270,6 @@ export default function CareersPage() {
               >
                 Send an application
               </a>
-            </div>
-            <div className="review-only">
-              <OdTag id="OD-11" />
             </div>
           </div>
           <Photo slot="careers" idx={6} className="arch" />
@@ -181,12 +319,14 @@ export default function CareersPage() {
 
       <section className="sec" id="open-roles">
         <div className="wrap">
-          <div className="head">
-            <h2>Open roles</h2>
-            <p>Choose a role to read the details and apply.</p>
-            <div className="review-only">
-              <OdTag id="OD-11" />
+          <div className="head row">
+            <div>
+              <h2>Open roles</h2>
+              <p>Choose a role to read the details and apply.</p>
             </div>
+            {isDeptFetching && !isRolesLoading ? (
+              <Spinner size="xs" variant="muted" label="Updating roles..." />
+            ) : null}
           </div>
 
           <div className="tabs-scroll" id="cdepts">
@@ -204,67 +344,82 @@ export default function CareersPage() {
 
           <div id="roles">
             <div className="roles">
-              {filteredRoles.map((r) => {
-                const isOpen = !!openRoles[r.id];
-                return (
-                  <div key={r.id} className={`role ${isOpen ? 'open' : ''}`.trim()}>
-                    <button
-                      type="button"
-                      aria-expanded={isOpen}
-                      onClick={() => setOpenRoles((prev) => ({ ...prev, [r.id]: !prev[r.id] }))}
-                    >
-                      <span>
-                        <b>{r.t}</b>
-                        <span className="rm">
-                          <span className="pill">{r.dept}</span>
-                          <span className="tag">{r.type}</span>
-                          <span className="tag">{r.loc}</span>
-                        </span>
-                      </span>
-                      <Icon name="chevron-down" />
-                    </button>
-                    <div className="bw">
-                      <div className="bi">
-                        <div className="rb">
-                          <p className="muted">{r.sum}</p>
-                          <div className="rcols">
-                            <div>
-                              <h5>What you’ll do</h5>
-                              <ul>
-                                {r.resp.map((x) => (
-                                  <li key={x}>{x}</li>
-                                ))}
-                              </ul>
+              {isRolesLoading && !allApiRoles
+                ? Array.from({ length: 4 }).map((_, idx) => (
+                    <div key={idx} className="role" style={{ padding: 20, display: 'grid', gap: 10 }}>
+                      <Skeleton width="55%" height="22px" radius="6px" />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Skeleton width="76px" height="22px" radius="999px" />
+                        <Skeleton width="76px" height="22px" radius="999px" />
+                        <Skeleton width="120px" height="22px" radius="999px" />
+                      </div>
+                    </div>
+                  ))
+                : filteredRoles.map((r) => {
+                    const isOpen = !!openRoles[r.code];
+                    return (
+                      <div key={r.code} className={`role ${isOpen ? 'open' : ''}`.trim()}>
+                        <button
+                          type="button"
+                          aria-expanded={isOpen}
+                          onClick={() => {
+                            const nextOpen = !openRoles[r.code];
+                            setOpenRoles((prev) => ({ ...prev, [r.code]: nextOpen }));
+                            if (nextOpen) setLastExpandedCode(r.code);
+                          }}
+                        >
+                          <span>
+                            <b>{r.title}</b>
+                            <span className="rm">
+                              <span className="pill">{r.department}</span>
+                              <span className="tag">{r.employmentType}</span>
+                              <span className="tag">{r.location}</span>
+                            </span>
+                          </span>
+                          <Icon name="chevron-down" />
+                        </button>
+                        <div className="bw">
+                          <div className="bi">
+                            <div className="rb">
+                              <p className="muted">{r.summary}</p>
+                              <div className="rcols">
+                                <div>
+                                  <h5>What you’ll do</h5>
+                                  <ul>
+                                    {r.responsibilities.map((x) => (
+                                      <li key={x}>{x}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                                <div>
+                                  <h5>What we’re looking for</h5>
+                                  <ul>
+                                    {r.requirements.map((x) => (
+                                      <li key={x}>{x}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              </div>
+                              <div>
+                                <button
+                                  type="button"
+                                  className="btn btn-brand btn-sm"
+                                  onClick={() => {
+                                    updateField('role', r.code);
+                                    setSubmitted(null);
+                                    const f = document.getElementById('cform');
+                                    if (f) f.scrollIntoView({ behavior: 'smooth' });
+                                  }}
+                                >
+                                  Apply for this role <Icon name="arrow-right" className="arr" />
+                                </button>
+                              </div>
                             </div>
-                            <div>
-                              <h5>What we’re looking for</h5>
-                              <ul>
-                                {r.req.map((x) => (
-                                  <li key={x}>{x}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-                          <div>
-                            <button
-                              type="button"
-                              className="btn btn-brand btn-sm"
-                              onClick={() => {
-                                updateField('role', r.id);
-                                setSent(false);
-                                const f = document.getElementById('cform');
-                                if (f) f.scrollIntoView({ behavior: 'smooth' });
-                              }}
-                            >
-                              Apply for this role <Icon name="arrow-right" className="arr" />
-                            </button>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
             </div>
           </div>
         </div>
@@ -292,7 +447,7 @@ export default function CareersPage() {
       <section className="sec" id="cform">
         <div className="wrap" style={{ maxWidth: 860 }}>
           <div className="panel">
-            {sent ? (
+            {submitted ? (
               <>
                 <div className="okmark">
                   <Icon name="check" />
@@ -302,6 +457,29 @@ export default function CareersPage() {
                   Thank you, {form.name.split(' ')[0]}. Our team will review your details and get in
                   touch at {form.email}.
                 </p>
+                {submitted.reference ? (
+                  <div className="ref">
+                    <Icon name="flag" />
+                    <span>{submitted.reference}</span>
+                    <button
+                      type="button"
+                      className="iconbtn sm"
+                      aria-label="Copy application reference"
+                      title="Copy application reference"
+                      onClick={() => {
+                        (navigator.clipboard
+                          ? navigator.clipboard.writeText(submitted.reference!)
+                          : Promise.reject()
+                        ).then(
+                          () => showToast('Reference copied'),
+                          () => showToast('Copy not available. Please copy it manually.'),
+                        );
+                      }}
+                    >
+                      <Icon name="copy" />
+                    </button>
+                  </div>
+                ) : null}
                 <div className="wnav">
                   <Link className="btn btn-line" to="/about">
                     Back to the academy
@@ -311,8 +489,10 @@ export default function CareersPage() {
                     className="btn btn-brand"
                     onClick={() => {
                       setForm(INITIAL_CAREER);
+                      setCvFile(null);
                       setErr({});
-                      setSent(false);
+                      setSubmitErr('');
+                      setSubmitted(null);
                     }}
                   >
                     Send another application
@@ -325,7 +505,7 @@ export default function CareersPage() {
                 <p className="muted">
                   {selectedRole ? (
                     <>
-                      You are applying for <b>{selectedRole.t}</b>.{' '}
+                      You are applying for <b>{selectedRole.title}</b>.{' '}
                     </>
                   ) : null}
                   Don’t see a fit? Choose “General application”.
@@ -406,7 +586,7 @@ export default function CareersPage() {
                       ) : null}
                     </div>
 
-                    <div className="fld">
+                    <div className={`fld ${err.link ? 'err' : ''}`.trim()}>
                       <label htmlFor="career-link">LinkedIn or portfolio link</label>
                       <input
                         className="inp"
@@ -416,13 +596,20 @@ export default function CareersPage() {
                         onChange={(e) => updateField('link', e.target.value)}
                         placeholder="https://"
                       />
-                      <span className="hint">Optional</span>
+                      {err.link ? (
+                        <span className="emsg">
+                          <Icon name="circle-alert" />
+                          {err.link}
+                        </span>
+                      ) : (
+                        <span className="hint">Optional</span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="fld">
+                  <div className={`fld ${err.cv ? 'err' : ''}`.trim()}>
                     <label>
-                      CV or resume <span className="muted">(optional)</span>
+                      CV or resume <span className="muted">(optional, PDF or Word, max 5 MB)</span>
                     </label>
                     <label className="upload">
                       <Icon name="file-up" />
@@ -431,11 +618,18 @@ export default function CareersPage() {
                         type="file"
                         accept=".pdf,.doc,.docx"
                         onChange={(e) => {
-                          const f = e.target.files?.[0];
+                          const f = e.target.files?.[0] || null;
+                          setCvFile(f);
                           updateField('cv', f ? f.name : '');
                         }}
                       />
                     </label>
+                    {err.cv ? (
+                      <span className="emsg">
+                        <Icon name="circle-alert" />
+                        {err.cv}
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className={`fld ${err.msg ? 'err' : ''}`.trim()}>
@@ -455,9 +649,30 @@ export default function CareersPage() {
                     ) : null}
                   </div>
 
+                  {submitErr ? (
+                    <span className="emsg">
+                      <Icon name="circle-alert" />
+                      {submitErr}
+                    </span>
+                  ) : null}
+
                   <div>
-                    <button type="button" className="btn btn-brand" onClick={handleSubmit}>
-                      Submit application <Icon name="arrow-right" className="arr" />
+                    <button
+                      type="button"
+                      className="btn btn-brand"
+                      disabled={isSubmitting}
+                      onClick={handleSubmit}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Spinner size="xs" variant="white" label="Submitting application..." />
+                          Submitting...
+                        </>
+                      ) : (
+                        <>
+                          Submit application <Icon name="arrow-right" className="arr" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>

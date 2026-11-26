@@ -1,22 +1,74 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BLOG } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
-import { BlogCard, BlogCover, CtaBand, OdTag } from '@/shared/components/ui/Illustrations';
+import { BlogCard, BlogCover, CtaBand } from '@/shared/components/ui/Illustrations';
+import { BlogCardSkeleton, Spinner } from '@/shared/components/ui/Loading';
+import {
+  mapApiBlogSummaryToPost,
+  useBlogCategoriesQuery,
+  useBlogPostsQuery,
+} from '@/hooks/queries';
+import type { BlogPost } from '@/shared/types/academy';
 
 export default function BlogPage() {
   const [blogCat, setBlogCat] = useState('all');
   const [bq, setBq] = useState('');
+  const [debouncedQ, setDebouncedQ] = useState('');
 
-  const categories = ['all', ...Array.from(new Set(BLOG.map((b) => b.cat)))];
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQ(bq.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [bq]);
+
+  const { data: apiCategories } = useBlogCategoriesQuery();
+  const {
+    data: apiPostsPage,
+    isLoading: isPostsLoading,
+    isFetching: isPostsFetching,
+    isError: isPostsError,
+  } = useBlogPostsQuery({
+    category: blogCat !== 'all' ? blogCat : undefined,
+    q: debouncedQ || undefined,
+    per_page: 20,
+  });
+
+  const categories = useMemo<Array<[slug: string, name: string]>>(() => {
+    if (apiCategories && apiCategories.length > 0) {
+      return [
+        ['all', 'All articles'],
+        ...[...apiCategories]
+          .sort((a, b) => a.sort_order - b.sort_order)
+          .map((c): [string, string] => [c.slug, c.name]),
+      ];
+    }
+    return [
+      ['all', 'All articles'],
+      ...Array.from(new Set(BLOG.map((b) => b.cat))).map((c): [string, string] => [c, c]),
+    ];
+  }, [apiCategories]);
+
   const q = bq.trim().toLowerCase();
-  const list = BLOG.filter(
-    (b) =>
-      (blogCat === 'all' || b.cat === blogCat) &&
-      (!q || (b.t + ' ' + b.ex + ' ' + b.cat).toLowerCase().includes(q)),
+  const localFiltered = useMemo(
+    () =>
+      BLOG.filter(
+        (b) =>
+          (blogCat === 'all' ||
+            b.cat === blogCat ||
+            b.cat.toLowerCase().replace(/[^a-z0-9]+/g, '-') === blogCat) &&
+          (!q || (b.t + ' ' + b.ex + ' ' + b.cat).toLowerCase().includes(q)),
+      ),
+    [blogCat, q],
   );
 
-  const showFeatured = blogCat === 'all' && !q && list.length > 0;
+  const list = useMemo<BlogPost[]>(() => {
+    if (!isPostsError && apiPostsPage?.data) {
+      return apiPostsPage.data.map(mapApiBlogSummaryToPost);
+    }
+    return localFiltered;
+  }, [apiPostsPage, isPostsError, localFiltered]);
+
+  const showFeatured = blogCat === 'all' && !debouncedQ && list.length > 0;
   const feat = showFeatured ? list[0] : null;
   const gridList = showFeatured ? list.slice(1) : list;
 
@@ -33,9 +85,6 @@ export default function BlogPage() {
           <p className="lede">
             Career advice, study tips and industry insights to help you learn, build and grow.
           </p>
-          <div className="review-only">
-            <OdTag id="OD-05" />
-          </div>
         </div>
       </section>
 
@@ -43,14 +92,14 @@ export default function BlogPage() {
         <div className="wrap">
           <div className="toolbar">
             <div className="tabs-scroll" id="blogcats" style={{ margin: 0, paddingBottom: 2 }}>
-              {categories.map((c) => (
+              {categories.map(([slug, label]) => (
                 <button
-                  key={c}
+                  key={slug}
                   type="button"
-                  className={`chip ${blogCat === c ? 'on' : ''}`.trim()}
-                  onClick={() => setBlogCat(c)}
+                  className={`chip ${blogCat === slug ? 'on' : ''}`.trim()}
+                  onClick={() => setBlogCat(slug)}
                 >
-                  {c === 'all' ? 'All articles' : c}
+                  {label}
                 </button>
               ))}
             </div>
@@ -63,14 +112,40 @@ export default function BlogPage() {
                 onChange={(e) => setBq(e.target.value)}
                 aria-label="Search articles"
               />
+              {isPostsFetching && !isPostsLoading ? (
+                <Spinner size="xs" variant="muted" label="Searching..." />
+              ) : null}
             </label>
           </div>
 
           <div id="bgrid">
-            {!list.length ? (
+            {isPostsLoading && !apiPostsPage ? (
+              <div className="blogs">
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+                <BlogCardSkeleton />
+              </div>
+            ) : !list.length ? (
               <div className="empty">
                 <h3>No articles found</h3>
                 <p>Try a different category or search term.</p>
+                {bq || blogCat !== 'all' ? (
+                  <p style={{ marginTop: 16 }}>
+                    <button
+                      type="button"
+                      className="btn btn-line btn-sm"
+                      onClick={() => {
+                        setBq('');
+                        setBlogCat('all');
+                      }}
+                    >
+                      Reset filters
+                    </button>
+                  </p>
+                ) : null}
               </div>
             ) : (
               <>

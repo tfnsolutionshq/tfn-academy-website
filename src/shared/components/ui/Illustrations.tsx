@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ODS, findTrack } from '@/shared/constants/academyData';
+import { findTrack } from '@/shared/constants/academyData';
 import type { BlogPost, FaqItem, Track } from '@/shared/types/academy';
 import { Icon } from '@/shared/components/ui/Icon';
 import { useSite } from '@/shared/context/SiteContext';
@@ -396,7 +396,7 @@ export function Scene({
 export function BlogCover({ post, extraClass = '' }: { post: BlogPost; extraClass?: string }) {
   const { photos, pickPhoto } = useSite();
   const slot = 'blog-' + post.slug;
-  const effectiveSrc = photos[slot] || DEFAULT_SLOT_IMAGES[slot];
+  const effectiveSrc = post.coverUrl || photos[slot] || DEFAULT_SLOT_IMAGES[slot];
   return (
     <div className={`bcover v${post.v} ${extraClass}`.trim()} data-slot={slot}>
       {effectiveSrc ? (
@@ -436,24 +436,8 @@ export function BlogCard({ post }: { post: BlogPost }) {
   );
 }
 
-export function OdTag({ id }: { id: string }) {
-  const { openOd } = useSite();
-  const o = ODS.find((x) => x.id === id);
-  if (!o) return null;
-  return (
-    <button
-      type="button"
-      className="od"
-      title={o.d}
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        openOd(id);
-      }}
-    >
-      {id} {o.t}
-    </button>
-  );
+export function OdTag({ id: _id }: { id: string }) {
+  return null;
 }
 
 export function CtaBand() {

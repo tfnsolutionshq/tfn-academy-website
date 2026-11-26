@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   EMAIL_REGEX,
@@ -9,8 +9,16 @@ import {
   HUB_SPACES,
 } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
-import { CtaBand, CustomDropdown, OdTag, Scene } from '@/shared/components/ui/Illustrations';
+import { CtaBand, CustomDropdown, Scene } from '@/shared/components/ui/Illustrations';
+import { Skeleton, Spinner } from '@/shared/components/ui/Loading';
 import { useToast } from '@/shared/context/ToastContext';
+import {
+  useHubBookingMutation,
+  useHubOverviewQuery,
+  useHubQuoteMutation,
+  useHubSpaceDetailQuery,
+} from '@/hooks/queries';
+import type { ApiHubQuoteResponse, HubPlanCode } from '@/core/api';
 
 const ngn = (n: number) => 'NGN ' + n.toLocaleString('en-NG');
 const fdate = (s: string) =>
@@ -25,12 +33,50 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 const ymd = (d: Date) =>
   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
-const HUB_MAX: Record<'h' | 'd' | 'm' | 'y', number> = { h: 10, d: 30, m: 12, y: 5 };
-const plansFor = (id: string) => HUB_PLANS.filter((p) => p[0] !== 'h' || id !== 'flexi');
+const SHORT_TO_PLAN: Record<'h' | 'd' | 'm' | 'y', HubPlanCode> = {
+  h: 'hourly',
+  d: 'daily',
+  m: 'monthly',
+  y: 'annual',
+};
+const PLAN_TO_SHORT: Record<HubPlanCode, 'h' | 'd' | 'm' | 'y'> = {
+  hourly: 'h',
+  daily: 'd',
+  monthly: 'm',
+  annual: 'y',
+};
+
+const DEFAULT_MAX: Record<HubPlanCode, number> = {
+  hourly: 10,
+  daily: 30,
+  monthly: 12,
+  annual: 5,
+};
+
+interface DisplayHubSpace {
+  slug: string;
+  name: string;
+  capacity: number;
+  badge: string | null;
+  description: string;
+  features: string[];
+  icon: string;
+  pricePerSeat: boolean;
+  sceneVariant: number;
+  prices: Partial<Record<HubPlanCode, { naira: number; label: string; unit: string; formatted: string }>>;
+}
+
+interface DisplayHubPlan {
+  code: HubPlanCode;
+  label: string;
+  unit: string;
+  description: string;
+  maxUnits: number;
+}
 
 const INITIAL_HUB = {
   space: '',
-  plan: 'd' as 'h' | 'd' | 'm' | 'y',
+  plan: 'daily' as HubPlanCode,
   count: 1,
   startDate: '',
   startTime: '',
@@ -38,6 +84,8 @@ const INITIAL_HUB = {
   name: '',
   email: '',
   phone: '',
+  notes: '',
+  consent: false,
 };
 
 export default function HubPage() {
@@ -45,23 +93,202 @@ export default function HubPage() {
   const [hubPrice, setHubPrice] = useState('flexi');
   const [form, setForm] = useState(INITIAL_HUB);
   const [err, setErr] = useState<Record<string, string>>({});
+  const [submitErr, setSubmitErr] = useState('');
   const [sent, setSent] = useState(false);
   const [refCode, setRefCode] = useState('');
+  const [liveQuote, setLiveQuote] = useState<ApiHubQuoteResponse | null>(null);
+
+  const { data: apiHub, isLoading: isHubLoading } = useHubOverviewQuery();
+  const { data: selectedSpaceDetail } = useHubSpaceDetailQuery(form.space || undefined);
+  const { mutate: fetchQuote, isPending: isQuoting } = useHubQuoteMutation();
+  const { mutateAsync: submitHubBooking, isPending: isSubmitting } = useHubBookingMutation();
+
+  const hubAddress = apiHub?.address || HUB_ADDRESS;
+  const closingTime = apiHub?.closing_time || '18:00';
+
+  const plans = useMemo<DisplayHubPlan[]>(() => {
+    if (apiHub?.plans && apiHub.plans.length > 0) {
+      return apiHub.plans.map((p) => ({
+        code: p.code,
+        label: p.label,
+        unit: p.unit,
+        description: p.description,
+        maxUnits: p.max_units || DEFAULT_MAX[p.code] || 10,
+      }));
+    }
+    return HUB_PLANS.map(([shortKey, label, unit, description]) => {
+      const code = SHORT_TO_PLAN[shortKey];
+      return {
+        code,
+        label,
+        unit,
+        description,
+        maxUnits: DEFAULT_MAX[code],
+      };
+    });
+  }, [apiHub?.plans]);
+
+  const maxUnitsMap = useMemo<Record<HubPlanCode, number>>(() => {
+    const map = { ...DEFAULT_MAX };
+    for (const p of plans) {
+      map[p.code] = p.maxUnits;
+    }
+    return map;
+  }, [plans]);
+
+  const spaces = useMemo<DisplayHubSpace[]>(() => {
+    const mapApiSpace = (s: NonNullable<typeof apiHub>['spaces'][number], idx: number): DisplayHubSpace => {
+      const local = HUB_SPACES.find((x) => x.id === s.slug);
+      const priceMap: DisplayHubSpace['prices'] = {};
+      for (const pr of s.prices || []) {
+        const planCode = pr.plan as HubPlanCode;
+        priceMap[planCode] = {
+          naira: Math.round(pr.price_kobo / 100),
+          label: pr.label,
+          unit: pr.unit,
+          formatted: pr.price,
+        };
+      }
+      return {
+        slug: s.slug,
+        name: s.name,
+        capacity: s.capacity,
+        badge: s.badge,
+        description: s.description,
+        features: s.features || [],
+        icon: s.icon || local?.ic || 'laptop',
+        pricePerSeat: s.price_per_seat,
+        sceneVariant: local?.v ?? idx % 3,
+        prices: priceMap,
+      };
+    };
+
+    if (apiHub?.spaces && apiHub.spaces.length > 0) {
+      const sorted = [...apiHub.spaces]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map(mapApiSpace);
+      if (selectedSpaceDetail) {
+        return sorted.map((item, idx) =>
+          item.slug === selectedSpaceDetail.slug ? mapApiSpace(selectedSpaceDetail, idx) : item,
+        );
+      }
+      return sorted;
+    }
+
+    return HUB_SPACES.map((x) => {
+      const priceMap: DisplayHubSpace['prices'] = {};
+      const staticPrices = HUB_PRICES[x.id] || {};
+      for (const [shortKey, val] of Object.entries(staticPrices)) {
+        const code = SHORT_TO_PLAN[shortKey as 'h' | 'd' | 'm' | 'y'];
+        if (code && typeof val === 'number') {
+          const pInfo = plans.find((p) => p.code === code);
+          priceMap[code] = {
+            naira: val,
+            label: pInfo?.label || code,
+            unit: pInfo?.unit || 'day',
+            formatted: ngn(val),
+          };
+        }
+      }
+      return {
+        slug: x.id,
+        name: x.n,
+        capacity: x.cap,
+        badge: x.tag || null,
+        description: x.d,
+        features: x.feat,
+        icon: x.ic,
+        pricePerSeat: x.id === 'flexi',
+        sceneVariant: x.v,
+        prices: priceMap,
+      };
+    });
+  }, [apiHub?.spaces, plans, selectedSpaceDetail]);
+
+  const amenities = useMemo(() => {
+    if (apiHub?.amenities && apiHub.amenities.length > 0) {
+      return [...apiHub.amenities]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((a) => [a.icon || 'check', a.title, a.description] as const);
+    }
+    return HUB_AMENITIES;
+  }, [apiHub?.amenities]);
+
+  const plansForSpace = (slug: string) => {
+    const target = spaces.find((s) => s.slug === slug);
+    if (!target) return plans;
+    const available = plans.filter((p) => Boolean(target.prices[p.code]));
+    return available.length > 0
+      ? available
+      : plans.filter((p) => p.code !== 'hourly' || slug !== 'flexi');
+  };
 
   const today = ymd(new Date());
-  const sp = HUB_SPACES.find((x) => x.id === form.space);
-  const planObj = HUB_PLANS.find((p) => p[0] === form.plan) || HUB_PLANS[1];
+  const sp = spaces.find((x) => x.slug === form.space);
+  const planObj = plans.find((p) => p.code === form.plan) || plans[1] || plans[0];
+
+  // Live debounced quote call (`POST /hub/quote`) when booking parameters are filled
+  useEffect(() => {
+    if (
+      !form.space ||
+      !form.startDate ||
+      form.startDate < today ||
+      !form.startTime ||
+      form.startTime >= closingTime
+    ) {
+      setLiveQuote(null);
+      return;
+    }
+    if (form.plan === 'hourly') {
+      const [hh, mm] = form.startTime.split(':').map(Number);
+      const [ch, cm] = closingTime.split(':').map(Number);
+      if (hh * 60 + mm + form.count * 60 > ch * 60 + cm) {
+        setLiveQuote(null);
+        return;
+      }
+    }
+
+    const timer = setTimeout(() => {
+      fetchQuote(
+        {
+          space: form.space,
+          plan: form.plan,
+          units: form.count,
+          guests: form.guests,
+          start_date: form.startDate,
+          start_time: form.startTime,
+        },
+        {
+          onSuccess: (res) => setLiveQuote(res),
+          onError: () => setLiveQuote(null),
+        },
+      );
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [
+    closingTime,
+    fetchQuote,
+    form.count,
+    form.guests,
+    form.plan,
+    form.space,
+    form.startDate,
+    form.startTime,
+    today,
+  ]);
 
   const getEndDate = () => {
+    if (liveQuote?.end_date) return liveQuote.end_date;
     if (!form.startDate) return '';
     const d = new Date(form.startDate + 'T00:00');
     if (isNaN(d.getTime())) return '';
-    if (form.plan === 'h') return form.startDate;
-    if (form.plan === 'd') {
+    if (form.plan === 'hourly') return form.startDate;
+    if (form.plan === 'daily') {
       d.setDate(d.getDate() + form.count - 1);
       return ymd(d);
     }
-    const months = form.plan === 'm' ? form.count : form.count * 12;
+    const months = form.plan === 'monthly' ? form.count : form.count * 12;
     const day = d.getDate();
     const t = new Date(d.getFullYear(), d.getMonth() + months, 1);
     const last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
@@ -71,7 +298,8 @@ export default function HubPage() {
   };
 
   const getEndTime = () => {
-    if (form.plan !== 'h') return '6:00 PM';
+    if (liveQuote?.end_time) return liveQuote.end_time;
+    if (form.plan !== 'hourly') return '6:00 PM';
     if (!form.startTime) return 'Choose a start time';
     const [h, m] = form.startTime.split(':').map(Number);
     const e = h * 60 + m + form.count * 60;
@@ -82,9 +310,27 @@ export default function HubPage() {
 
   const getEst = () => {
     if (!sp) return null;
-    const pr = HUB_PRICES[sp.id]?.[form.plan] ?? 0;
-    const seat = sp.id === 'flexi' ? form.guests : 1;
-    return { sp, pr, units: form.count, seat, total: pr * form.count * seat };
+    const pr =
+      sp.prices[form.plan]?.naira ??
+      HUB_PRICES[sp.slug]?.[PLAN_TO_SHORT[form.plan]] ??
+      0;
+    const seat = sp.pricePerSeat ? form.guests : 1;
+    const localTotal = pr * form.count * seat;
+    const quoteTotalLabel =
+      liveQuote?.total ||
+      liveQuote?.estimated_total ||
+      (typeof liveQuote?.total_kobo === 'number'
+        ? ngn(Math.round(liveQuote.total_kobo / 100))
+        : typeof liveQuote?.estimated_total_kobo === 'number'
+          ? ngn(Math.round(liveQuote.estimated_total_kobo / 100))
+          : null);
+    return {
+      sp,
+      pr,
+      units: form.count,
+      seat,
+      totalLabel: quoteTotalLabel || ngn(localTotal),
+    };
   };
 
   const endDate = getEndDate();
@@ -94,8 +340,8 @@ export default function HubPage() {
   const renderSummary = () => {
     const rows: Array<[string, string]> = [
       ['Location', 'TFN Hub, Awka'],
-      ['Space', est ? est.sp.n : 'Not selected'],
-      ['Plan', `${planObj[1]}, ${form.count} ${planObj[2]}${form.count > 1 ? 's' : ''}`],
+      ['Space', est ? est.sp.name : 'Not selected'],
+      ['Plan', `${planObj.label}, ${form.count} ${planObj.unit}${form.count > 1 ? 's' : ''}`],
       [
         'Start',
         form.startDate
@@ -118,41 +364,48 @@ export default function HubPage() {
           ))}
         </dl>
         <div className="est">
-          <span className="muted small">Estimated total</span>
-          <b>{est ? ngn(est.total) : 'Choose a space'}</b>
+          <span
+            className="muted small"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            Estimated total
+            {isQuoting ? <Spinner size="xs" variant="muted" label="Calculating..." /> : null}
+          </span>
+          <b>{est ? est.totalLabel : 'Choose a space'}</b>
           {est ? (
             <span className="small muted">
-              {ngn(est.pr)} x {form.count} {planObj[2]}
+              {ngn(est.pr)} x {form.count} {planObj.unit}
               {form.count > 1 ? 's' : ''}
               {est.seat > 1 ? ` x ${est.seat} seats` : ''}
-              {est.sp.id === 'flexi' && est.seat === 1 ? ' x 1 seat' : ''}. The hub team confirms
+              {est.sp.pricePerSeat && est.seat === 1 ? ' x 1 seat' : ''}. The hub team confirms
               the final amount.
             </span>
           ) : null}
-        </div>
-        <div className="review-only">
-          <OdTag id="OD-10" />
         </div>
       </>
     );
   };
 
-  const hubBook = (spaceId: string, planKey?: 'h' | 'd' | 'm' | 'y') => {
-    const targetSp = HUB_SPACES.find((x) => x.id === spaceId);
+  const hubBook = (spaceSlug: string, planKey?: HubPlanCode) => {
+    const targetSp = spaces.find((x) => x.slug === spaceSlug);
     setForm((prev) => {
       let nextPlan = planKey || prev.plan;
-      if (nextPlan === 'h' && spaceId === 'flexi') nextPlan = 'd';
-      const nextCount = Math.min(prev.count, HUB_MAX[nextPlan]);
-      const nextGuests = targetSp ? Math.min(prev.guests, targetSp.cap) : prev.guests;
+      const allowed = plansForSpace(spaceSlug);
+      if (!allowed.some((p) => p.code === nextPlan)) {
+        nextPlan = allowed[0]?.code || 'daily';
+      }
+      const nextCount = Math.min(prev.count, maxUnitsMap[nextPlan]);
+      const nextGuests = targetSp ? Math.min(prev.guests, targetSp.capacity) : prev.guests;
       return {
         ...prev,
-        space: spaceId,
+        space: spaceSlug,
         plan: nextPlan,
         count: nextCount,
         guests: nextGuests,
       };
     });
     setSent(false);
+    setSubmitErr('');
     setErr((prev) => {
       const next = { ...prev };
       delete next.space;
@@ -164,8 +417,12 @@ export default function HubPage() {
     }, 50);
   };
 
-  const updateField = <K extends keyof typeof INITIAL_HUB>(key: K, val: (typeof INITIAL_HUB)[K]) => {
+  const updateField = <K extends keyof typeof INITIAL_HUB>(
+    key: K,
+    val: (typeof INITIAL_HUB)[K],
+  ) => {
     setForm((prev) => ({ ...prev, [key]: val }));
+    setSubmitErr('');
     setErr((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
@@ -174,25 +431,41 @@ export default function HubPage() {
     });
   };
 
-  const handleSubmit = () => {
+  const focusFirstError = () => {
+    setTimeout(() => {
+      const firstErr = document.querySelector<HTMLElement>(
+        '.fld.err .inp, .fld.err .dd-btn, .check.err input',
+      );
+      if (firstErr) {
+        firstErr.scrollIntoView({ block: 'center' });
+        firstErr.focus({ preventScroll: true });
+      }
+    }, 20);
+  };
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+    setSubmitErr('');
+
     const e: Record<string, string> = {};
     if (!sp) e.space = 'Choose a space.';
     if (!form.startDate) e.startDate = 'Choose a start date.';
     else if (form.startDate < today) e.startDate = 'The start date can’t be in the past.';
 
+    const [ch, cm] = closingTime.split(':').map(Number);
     if (!form.startTime) e.startTime = 'Choose a start time.';
-    else if (form.plan === 'h') {
+    else if (form.plan === 'hourly') {
       const [hh, mm] = form.startTime.split(':').map(Number);
-      if (hh * 60 + mm + form.count * 60 > 18 * 60) {
+      if (hh * 60 + mm + form.count * 60 > ch * 60 + cm) {
         e.startTime =
           'Hourly bookings must finish by 6:00 PM. Choose an earlier start or fewer hours.';
       }
-    } else if (form.startTime >= '18:00') {
+    } else if (form.startTime >= closingTime) {
       e.startTime = 'The hub closes at 6:00 PM. Choose an earlier start time.';
     }
 
-    if (sp && (form.guests < 1 || form.guests > sp.cap)) {
-      e.guests = `Guests must be between 1 and ${sp.cap}.`;
+    if (sp && (form.guests < 1 || form.guests > sp.capacity)) {
+      e.guests = `Guests must be between 1 and ${sp.capacity}.`;
     }
     if (!form.name.trim()) e.name = 'Enter your name.';
     if (!EMAIL_REGEX.test(form.email.trim())) {
@@ -201,32 +474,67 @@ export default function HubPage() {
     if (!/^\+?\d[\d\s-]{7,16}$/.test(form.phone.trim())) {
       e.phone = 'Enter a phone number with at least 8 digits.';
     }
+    if (!form.consent) {
+      e.consent = 'Tick the box so the hub team can contact you about this reservation.';
+    }
 
     setErr(e);
-    if (!Object.keys(e).length) {
+    if (Object.keys(e).length > 0) {
+      focusFirstError();
+      return;
+    }
+
+    try {
+      const res = await submitHubBooking({
+        space: form.space,
+        plan: form.plan,
+        units: form.count,
+        guests: form.guests,
+        start_date: form.startDate,
+        start_time: form.startTime,
+        name: form.name.trim(),
+        email: form.email.trim(),
+        phone: form.phone.replace(/[\s-]/g, ''),
+        notes: form.notes.trim() || undefined,
+        consent: form.consent,
+      });
+      setRefCode(
+        res?.reference ||
+          res?.id ||
+          'HUB-' + String(Math.floor(10000 + Math.random() * 90000)),
+      );
       setSent(true);
-      setRefCode('HUB-' + String(Math.floor(10000 + Math.random() * 90000)));
       showToast('Reservation request sent');
       setTimeout(() => {
         const r = document.getElementById('reserve');
         if (r) r.scrollIntoView({ block: 'start' });
       }, 20);
-    } else {
-      setTimeout(() => {
-        const firstErr = document.querySelector<HTMLElement>(
-          '.fld.err .inp, .fld.err .dd-btn, .check.err input',
-        );
-        if (firstErr) {
-          firstErr.scrollIntoView({ block: 'center' });
-          firstErr.focus({ preventScroll: true });
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string; errors?: Record<string, string[]> };
+      if (apiErr?.errors && Object.keys(apiErr.errors).length > 0) {
+        const fieldMap: Record<string, string> = {
+          start_date: 'startDate',
+          start_time: 'startTime',
+          units: 'count',
+        };
+        const mapped: Record<string, string> = {};
+        for (const [k, msgs] of Object.entries(apiErr.errors)) {
+          if (msgs && msgs.length > 0) {
+            mapped[fieldMap[k] || k] = msgs[0];
+          }
         }
-      }, 20);
+        setErr(mapped);
+        focusFirstError();
+      }
+      const msg = apiErr?.message || 'Could not submit reservation request. Please try again.';
+      setSubmitErr(msg);
+      showToast(msg);
     }
   };
 
-  const pricingSp = HUB_SPACES.find((x) => x.id === hubPrice) || HUB_SPACES[0];
-  const pricingSeatSuffix = pricingSp.id === 'flexi' ? ' per seat' : '';
-  const spaceOpts = HUB_SPACES.map((x) => ({ v: x.id, l: x.n, ic: x.ic }));
+  const pricingSp = spaces.find((x) => x.slug === hubPrice) || spaces[0];
+  const pricingSeatSuffix = pricingSp?.pricePerSeat ? ' per seat' : '';
+  const spaceOpts = spaces.map((x) => ({ v: x.slug, l: x.name, ic: x.icon }));
 
   return (
     <>
@@ -266,9 +574,6 @@ export default function HubPage() {
               >
                 See pricing
               </a>
-            </div>
-            <div className="review-only">
-              <OdTag id="OD-10" />
             </div>
           </div>
           <div className="hubpics">
@@ -322,50 +627,62 @@ export default function HubPage() {
             </p>
           </div>
           <div className="hspaces">
-            {HUB_SPACES.map((x) => (
-              <div key={x.id} className="hspace">
-                <Scene slot={`space-${x.id}`} v={x.v} />
-                <div className="hb">
-                  <div className="chips">
-                    {x.tag ? (
-                      <span className="pill ac">{x.tag}</span>
-                    ) : (
-                      <span className="pill ac">Up to {x.cap} seats</span>
-                    )}
+            {isHubLoading && !apiHub
+              ? Array.from({ length: 3 }).map((_, idx) => (
+                  <div key={idx} className="hspace" style={{ pointerEvents: 'none' }}>
+                    <Skeleton height="220px" radius="16px" />
+                    <div className="hb" style={{ display: 'grid', gap: 12 }}>
+                      <Skeleton width="100px" height="22px" radius="999px" />
+                      <Skeleton width="65%" height="24px" radius="6px" />
+                      <Skeleton width="100%" height="14px" radius="4px" />
+                      <Skeleton width="85%" height="14px" radius="4px" />
+                    </div>
                   </div>
-                  <h3>{x.n}</h3>
-                  <p className="muted">{x.d}</p>
-                  <ul>
-                    {x.feat.map((f) => (
-                      <li key={f}>
-                        <Icon name="check" />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="acts">
-                    <button
-                      type="button"
-                      className="btn btn-brand btn-sm"
-                      onClick={() => hubBook(x.id)}
-                    >
-                      Book this space
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-line btn-sm"
-                      onClick={() => {
-                        setHubPrice(x.id);
-                        const el = document.getElementById('hub-pricing');
-                        if (el) el.scrollIntoView({ behavior: 'smooth' });
-                      }}
-                    >
-                      See pricing
-                    </button>
+                ))
+              : spaces.map((x) => (
+                  <div key={x.slug} className="hspace">
+                    <Scene slot={`space-${x.slug}`} v={x.sceneVariant} />
+                    <div className="hb">
+                      <div className="chips">
+                        {x.badge ? (
+                          <span className="pill ac">{x.badge}</span>
+                        ) : (
+                          <span className="pill ac">Up to {x.capacity} seats</span>
+                        )}
+                      </div>
+                      <h3>{x.name}</h3>
+                      <p className="muted">{x.description}</p>
+                      <ul>
+                        {x.features.map((f) => (
+                          <li key={f}>
+                            <Icon name="check" />
+                            {f}
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="acts">
+                        <button
+                          type="button"
+                          className="btn btn-brand btn-sm"
+                          onClick={() => hubBook(x.slug)}
+                        >
+                          Book this space
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-line btn-sm"
+                          onClick={() => {
+                            setHubPrice(x.slug);
+                            const el = document.getElementById('hub-pricing');
+                            if (el) el.scrollIntoView({ behavior: 'smooth' });
+                          }}
+                        >
+                          See pricing
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                ))}
           </div>
         </div>
       </section>
@@ -377,7 +694,7 @@ export default function HubPage() {
             <p>The basics are covered, so you can spend your day on the work that matters.</p>
           </div>
           <div className="amen">
-            {HUB_AMENITIES.map(([i, t, d]) => (
+            {amenities.map(([i, t, d]) => (
               <div key={t} className="amc">
                 <Icon name={i} />
                 <h3>{t}</h3>
@@ -392,67 +709,77 @@ export default function HubPage() {
         <div className="wrap">
           <div className="head">
             <h2>Simple, fair pricing</h2>
-            <p>Pick a space, then choose daily, monthly or annual access.</p>
-            <div className="review-only">
-              <OdTag id="OD-10" />
-            </div>
+            <p>Pick a space, then choose hourly, daily, monthly or annual access.</p>
           </div>
 
           <div className="seg" id="hubseg" role="tablist" aria-label="Space">
-            {HUB_SPACES.map((x) => (
+            {spaces.map((x) => (
               <button
-                key={x.id}
+                key={x.slug}
                 type="button"
-                className={hubPrice === x.id ? 'on' : ''}
-                onClick={() => setHubPrice(x.id)}
+                className={hubPrice === x.slug ? 'on' : ''}
+                onClick={() => setHubPrice(x.slug)}
               >
-                {x.n}
+                {x.name}
               </button>
             ))}
           </div>
 
-          <div className="plans" id="plans">
-            {plansFor(pricingSp.id).map(([k, l, u, d]) => (
-              <div key={k} className={`plan ${k === 'm' ? 'pop' : ''}`.trim()}>
-                {k === 'm' ? <span className="pill ac badge">Most popular</span> : null}
-                <span className="pill" style={{ alignSelf: 'flex-start' }}>
-                  {l}
-                  {k === 'h' ? ' rate' : ''}
-                </span>
-                <div>
-                  <span className="price">{ngn(HUB_PRICES[pricingSp.id]?.[k] ?? 0)}</span>{' '}
-                  <span className="per">
-                    / {u}
-                    {pricingSeatSuffix}
-                  </span>
-                </div>
-                <p className="muted small">{d}</p>
-                <ul className="mini-list">
-                  <li>
-                    <Icon name="check" />
-                    {pricingSp.n}
-                    {pricingSp.id === 'meeting' ? '' : ` (up to ${pricingSp.cap} seats)`}
-                  </li>
-                  <li>
-                    <Icon name="check" />
-                    Stable power and fast Wi-Fi
-                  </li>
-                  <li>
-                    <Icon name="check" />
-                    Air-conditioned, secure space
-                  </li>
-                </ul>
-                <button
-                  type="button"
-                  className={`btn ${k === 'm' ? 'btn-brand' : 'btn-line'} btn-sm`}
-                  style={{ marginTop: 'auto' }}
-                  onClick={() => hubBook(hubPrice, k)}
-                >
-                  Reserve {l.toLowerCase()} <Icon name="arrow-right" className="arr" />
-                </button>
-              </div>
-            ))}
-          </div>
+          {pricingSp ? (
+            <div className="plans" id="plans">
+              {plansForSpace(pricingSp.slug).map((p) => {
+                const priceInfo = pricingSp.prices[p.code];
+                const formattedPrice = priceInfo?.formatted || ngn(0);
+                return (
+                  <div
+                    key={p.code}
+                    className={`plan ${p.code === 'monthly' ? 'pop' : ''}`.trim()}
+                  >
+                    {p.code === 'monthly' ? (
+                      <span className="pill ac badge">Most popular</span>
+                    ) : null}
+                    <span className="pill" style={{ alignSelf: 'flex-start' }}>
+                      {p.label}
+                      {p.code === 'hourly' ? ' rate' : ''}
+                    </span>
+                    <div>
+                      <span className="price">{formattedPrice}</span>{' '}
+                      <span className="per">
+                        / {p.unit}
+                        {pricingSeatSuffix}
+                      </span>
+                    </div>
+                    <p className="muted small">{p.description}</p>
+                    <ul className="mini-list">
+                      <li>
+                        <Icon name="check" />
+                        {pricingSp.name}
+                        {pricingSp.slug === 'meeting'
+                          ? ''
+                          : ` (up to ${pricingSp.capacity} seats)`}
+                      </li>
+                      <li>
+                        <Icon name="check" />
+                        Stable power and fast Wi-Fi
+                      </li>
+                      <li>
+                        <Icon name="check" />
+                        Air-conditioned, secure space
+                      </li>
+                    </ul>
+                    <button
+                      type="button"
+                      className={`btn ${p.code === 'monthly' ? 'btn-brand' : 'btn-line'} btn-sm`}
+                      style={{ marginTop: 'auto' }}
+                      onClick={() => hubBook(pricingSp.slug, p.code)}
+                    >
+                      Reserve {p.label.toLowerCase()} <Icon name="arrow-right" className="arr" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       </section>
 
@@ -475,7 +802,24 @@ export default function HubPage() {
               </p>
               <div className="ref">
                 <Icon name="flag" />
-                {refCode}
+                <span>{refCode}</span>
+                <button
+                  type="button"
+                  className="iconbtn sm"
+                  aria-label="Copy reservation reference"
+                  title="Copy reservation reference"
+                  onClick={() => {
+                    (navigator.clipboard
+                      ? navigator.clipboard.writeText(refCode)
+                      : Promise.reject()
+                    ).then(
+                      () => showToast('Reference copied'),
+                      () => showToast('Copy not available. Please copy it manually.'),
+                    );
+                  }}
+                >
+                  <Icon name="copy" />
+                </button>
               </div>
               <div className="hubsum" style={{ position: 'static', marginTop: 18 }} id="hubsum">
                 {renderSummary()}
@@ -490,6 +834,8 @@ export default function HubPage() {
                   onClick={() => {
                     setForm(INITIAL_HUB);
                     setErr({});
+                    setSubmitErr('');
+                    setLiveQuote(null);
                     setSent(false);
                     setRefCode('');
                   }}
@@ -510,7 +856,7 @@ export default function HubPage() {
                     <Icon name="map-pin" />
                     <div>
                       <b>TFN Hub</b>
-                      <span className="small muted">{HUB_ADDRESS}</span>
+                      <span className="small muted">{hubAddress}</span>
                     </div>
                   </div>
 
@@ -520,13 +866,17 @@ export default function HubPage() {
                       id="hub.space"
                       value={form.space}
                       onChange={(v) => {
-                        const chosen = HUB_SPACES.find((x) => x.id === v);
+                        const chosen = spaces.find((x) => x.slug === v);
+                        const allowed = plansForSpace(v);
                         setForm((prev) => ({
                           ...prev,
                           space: v,
-                          plan: prev.plan === 'h' && v === 'flexi' ? 'd' : prev.plan,
-                          guests: chosen ? Math.min(prev.guests, chosen.cap) : prev.guests,
+                          plan: allowed.some((p) => p.code === prev.plan)
+                            ? prev.plan
+                            : allowed[0]?.code || 'daily',
+                          guests: chosen ? Math.min(prev.guests, chosen.capacity) : prev.guests,
                         }));
+                        setSubmitErr('');
                         setErr((prev) => {
                           const next = { ...prev };
                           delete next.space;
@@ -547,20 +897,20 @@ export default function HubPage() {
                   <div className="fld">
                     <label>Plan</label>
                     <div className="chips">
-                      {(form.space ? plansFor(form.space) : HUB_PLANS).map(([k, l]) => (
+                      {(form.space ? plansForSpace(form.space) : plans).map((p) => (
                         <button
-                          key={k}
+                          key={p.code}
                           type="button"
-                          className={`chip planchip ${form.plan === k ? 'on' : ''}`.trim()}
+                          className={`chip planchip ${form.plan === p.code ? 'on' : ''}`.trim()}
                           onClick={() =>
                             setForm((prev) => ({
                               ...prev,
-                              plan: k,
-                              count: Math.min(prev.count, HUB_MAX[k]),
+                              plan: p.code,
+                              count: Math.min(prev.count, maxUnitsMap[p.code]),
                             }))
                           }
                         >
-                          {l}
+                          {p.label}
                         </button>
                       ))}
                     </div>
@@ -587,14 +937,14 @@ export default function HubPage() {
                         onClick={() =>
                           setForm((prev) => ({
                             ...prev,
-                            count: Math.min(HUB_MAX[prev.plan], prev.count + 1),
+                            count: Math.min(maxUnitsMap[prev.plan], prev.count + 1),
                           }))
                         }
                       >
                         <Icon name="plus" />
                       </button>
                       <span className="muted small" id="durlabel">
-                        {form.count} {planObj[2]}
+                        {form.count} {planObj.unit}
                         {form.count > 1 ? 's' : ''}
                       </span>
                     </div>
@@ -660,7 +1010,7 @@ export default function HubPage() {
                         value={endTime}
                       />
                       <span className="hint">
-                        {form.plan === 'h'
+                        {form.plan === 'hourly'
                           ? 'Start time plus your hours.'
                           : 'Closing time is 6:00 PM.'}
                       </span>
@@ -688,7 +1038,7 @@ export default function HubPage() {
                         onClick={() =>
                           updateField(
                             'guests',
-                            Math.min(sp ? sp.cap : 28, form.guests + 1),
+                            Math.min(sp ? sp.capacity : 28, form.guests + 1),
                           )
                         }
                       >
@@ -696,7 +1046,7 @@ export default function HubPage() {
                       </button>
                       <span className="muted small">
                         {sp
-                          ? `Up to ${sp.cap}${sp.id === 'flexi' ? ', priced per seat' : ''}`
+                          ? `Up to ${sp.capacity}${sp.pricePerSeat ? ', priced per seat' : ''}`
                           : 'Choose a space to see the limit'}
                       </span>
                     </div>
@@ -770,9 +1120,67 @@ export default function HubPage() {
                     </div>
                   </div>
 
+                  <div className="fld">
+                    <label htmlFor="hub-notes">
+                      Additional notes <span className="muted">(optional)</span>
+                    </label>
+                    <textarea
+                      className="inp"
+                      id="hub-notes"
+                      rows={3}
+                      value={form.notes}
+                      onChange={(e) => updateField('notes', e.target.value)}
+                      placeholder="e.g. Projector, HDMI cable, or seating arrangement"
+                    />
+                  </div>
+
+                  <label
+                    className={`check ${form.consent ? 'on' : ''} ${err.consent ? 'err' : ''}`.trim()}
+                  >
+                    <input
+                      type="checkbox"
+                      id="hub-consent"
+                      checked={form.consent}
+                      onChange={(e) => updateField('consent', e.target.checked)}
+                    />
+                    <span>
+                      <b>
+                        I agree that TFN Hub can use these details to confirm my space reservation.
+                      </b>
+                      <span>We only use them to coordinate your booking.</span>
+                    </span>
+                  </label>
+                  {err.consent ? (
+                    <span className="emsg">
+                      <Icon name="circle-alert" />
+                      {err.consent}
+                    </span>
+                  ) : null}
+
+                  {submitErr ? (
+                    <span className="emsg">
+                      <Icon name="circle-alert" />
+                      {submitErr}
+                    </span>
+                  ) : null}
+
                   <div>
-                    <button type="button" className="btn btn-brand" onClick={handleSubmit}>
-                      Request reservation <Icon name="arrow-right" className="arr" />
+                    <button
+                      type="button"
+                      className="btn btn-brand"
+                      disabled={isSubmitting}
+                      onClick={handleSubmit}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Spinner size="xs" variant="white" label="Submitting reservation..." />
+                          Submitting...
+                        </>
+                      ) : (
+                        <>
+                          Request reservation <Icon name="arrow-right" className="arr" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -822,7 +1230,7 @@ export default function HubPage() {
                 <circle cx="300" cy="215" r="16" style={{ fill: 'var(--accent)' }} />
               </svg>
               <iframe
-                src={`https://maps.google.com/maps?q=${encodeURIComponent(HUB_ADDRESS)}&output=embed`}
+                src={`https://maps.google.com/maps?q=${encodeURIComponent(hubAddress)}&output=embed`}
                 title="Map of TFN Hub, Awka"
                 loading="lazy"
               />
@@ -834,7 +1242,7 @@ export default function HubPage() {
                 <Icon name="map-pin" />
                 <div>
                   <b>TFN Hub</b>
-                  <span className="small muted">{HUB_ADDRESS}</span>
+                  <span className="small muted">{hubAddress}</span>
                 </div>
               </div>
               <p className="small muted">
@@ -844,16 +1252,13 @@ export default function HubPage() {
               </p>
               <a
                 className="btn btn-line btn-sm"
-                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(HUB_ADDRESS)}`}
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(hubAddress)}`}
                 target="_blank"
                 rel="noopener"
               >
                 <Icon name="navigation" />
                 Get directions
               </a>
-              <div className="review-only">
-                <OdTag id="OD-10" />
-              </div>
             </div>
           </div>
         </div>

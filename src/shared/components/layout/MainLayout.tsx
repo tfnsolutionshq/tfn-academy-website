@@ -4,8 +4,10 @@ import { Header } from '@/shared/components/layout/Header';
 import { Footer } from '@/shared/components/layout/Footer';
 import { Icon } from '@/shared/components/ui/Icon';
 import { Photo } from '@/shared/components/ui/Illustrations';
-import { BLOG, ODS, TALENT, WA_NUMBER, findTrack } from '@/shared/constants/academyData';
+import { BLOG, TALENT, WA_NUMBER, findTrack } from '@/shared/constants/academyData';
 import { useSite } from '@/shared/context/SiteContext';
+import { useTalentDetailQuery } from '@/hooks/queries';
+import { Spinner } from '@/shared/components/ui/Loading';
 
 const TITLES: Record<string, string> = {
   '/': 'Learn the skills the world is hiring for',
@@ -27,261 +29,136 @@ const TITLES: Record<string, string> = {
 function Overlay() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const {
-    review,
-    toggleReview,
-    panel,
-    setPanel,
-    profId,
-    highlightOdId,
-    brand,
-    accent,
-    applyColor,
-    resetColors,
-    resetPhotos,
-    triggerConsult,
-  } = useSite();
+  const { panel, setPanel, profId, triggerConsult } = useSite();
 
-  const [brandHexInput, setBrandHexInput] = useState(brand.toUpperCase());
-  const [accentHexInput, setAccentHexInput] = useState(accent.toUpperCase());
+  const { data: apiTalent, isLoading: isTalentLoading } = useTalentDetailQuery(
+    panel === 'profile' ? profId : null,
+  );
 
-  useEffect(() => {
-    setBrandHexInput(brand.toUpperCase());
-  }, [brand]);
-
-  useEffect(() => {
-    setAccentHexInput(accent.toUpperCase());
-  }, [accent]);
-
-  useEffect(() => {
-    if (panel === 'review' && highlightOdId) {
-      const el = document.getElementById('od-' + highlightOdId);
-      if (el) {
-        el.scrollIntoView({ block: 'center' });
-        el.style.outline = '3px solid #C99A2E';
+  const localTalent = profId ? TALENT.find((x) => x.id === profId) : null;
+  const talent = apiTalent
+    ? {
+        id: apiTalent.code,
+        n: apiTalent.name,
+        s: apiTalent.programme?.slug || localTalent?.s || 'frontend',
+        p: localTalent?.p ?? 0,
+        photoUrl: apiTalent.photo_url,
+        role: apiTalent.role_title,
+        skills: apiTalent.skills || [],
+        av: apiTalent.availability,
+        bio: apiTalent.bio,
+        proj: apiTalent.signature_project,
       }
-    }
-  }, [panel, highlightOdId]);
+    : localTalent
+      ? { ...localTalent, photoUrl: null as string | null }
+      : null;
 
-  const talent = profId ? TALENT.find((x) => x.id === profId) : null;
   const talentProg = talent ? findTrack(talent.s) : null;
 
   return (
     <>
-      <button
-        type="button"
-        className="rv-btn"
-        aria-label="Review notes"
-        onClick={() => setPanel('review')}
-      >
-        <Icon name="flag" />
-        <span className="rvl">Review notes</span> <span className="cnt">{ODS.length}</span>
-      </button>
-
-      {panel === 'review' && (
+      {panel === 'profile' && (talent || isTalentLoading) && (
         <>
           <div className="scrim" onClick={() => setPanel(null)} />
-          <aside className="sheet" role="dialog" aria-modal="true" aria-label="Review notes">
-            <div className="sheet-h">
-              <h3>Review notes</h3>
-              <button
-                type="button"
-                className="iconbtn"
-                onClick={() => setPanel(null)}
-                aria-label="Close"
-              >
-                <Icon name="x" />
-              </button>
-            </div>
-
-            <div className="box">
-              <h4>Brand colours</h4>
-              <div className="colrow">
-                <label htmlFor="pc-brand">Primary</label>
-                <input
-                  type="color"
-                  id="pc-brand"
-                  value={brand}
-                  aria-label="Primary colour"
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    applyColor('brand', v, true);
-                    setBrandHexInput(v.toUpperCase());
-                  }}
-                />
-                <input
-                  className="inp"
-                  id="hx-brand"
-                  value={brandHexInput}
-                  maxLength={7}
-                  aria-label="Primary hex"
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    setBrandHexInput(raw);
-                    let x = raw.trim();
-                    if (x && x[0] !== '#') x = '#' + x;
-                    applyColor('brand', x, true);
-                  }}
-                />
+          <aside
+            className="sheet prof"
+            role="dialog"
+            aria-modal="true"
+            aria-label={talent?.n || 'Talent profile'}
+          >
+            {isTalentLoading && !talent ? (
+              <div style={{ display: 'grid', placeItems: 'center', minHeight: 240, gap: 12 }}>
+                <Spinner size="md" variant="brand" label="Loading profile..." />
+                <span className="muted small">Loading talent profile...</span>
               </div>
-              <div className="colrow">
-                <label htmlFor="pc-accent">Secondary</label>
-                <input
-                  type="color"
-                  id="pc-accent"
-                  value={accent}
-                  aria-label="Secondary colour"
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    applyColor('accent', v, true);
-                    setAccentHexInput(v.toUpperCase());
-                  }}
-                />
-                <input
-                  className="inp"
-                  id="hx-accent"
-                  value={accentHexInput}
-                  maxLength={7}
-                  aria-label="Secondary hex"
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    setAccentHexInput(raw);
-                    let x = raw.trim();
-                    if (x && x[0] !== '#') x = '#' + x;
-                    applyColor('accent', x, true);
-                  }}
-                />
-              </div>
-              <div>
-                <button type="button" className="btn btn-line btn-sm" onClick={resetColors}>
-                  Reset to TFN colours
-                </button>
-              </div>
-              <p className="small muted">
-                Gradients and the dark navy are derived from these two colours. To make a change
-                permanent, send the hex codes or edit <code>--brand</code> and <code>--accent</code>{' '}
-                at the top of the file.
-              </p>
-            </div>
-
-            <div className="box">
-              <h4>Student photos</h4>
-              <p className="small muted">
-                Illustrated stand-ins are shown until real photos are supplied. Hover any picture
-                and choose “Replace photo” to preview your own. Photos stay in this browser only.
-              </p>
-              <div>
-                <button type="button" className="btn btn-line btn-sm" onClick={resetPhotos}>
-                  Reset all photos
-                </button>
-              </div>
-            </div>
-
-            <div className="toggle">
-              <span>Show review tags on pages</span>
-              <button
-                type="button"
-                className={`swt ${review ? 'on' : ''}`.trim()}
-                onClick={toggleReview}
-                aria-pressed={review}
-                aria-label="Show review tags"
-              />
-            </div>
-
-            <p className="small muted">Open decisions for stakeholders:</p>
-            <div className="odlist">
-              {ODS.map((o) => (
-                <div key={o.id} className="oditem" id={`od-${o.id}`}>
-                  <b>{o.id}</b>
-                  <h4>{o.t}</h4>
-                  <p>{o.d}</p>
+            ) : talent ? (
+              <>
+                <div className="sheet-h">
+                  <h3>{talent.n}</h3>
+                  <button
+                    type="button"
+                    className="iconbtn"
+                    onClick={() => setPanel(null)}
+                    aria-label="Close"
+                  >
+                    <Icon name="x" />
+                  </button>
                 </div>
-              ))}
-            </div>
-          </aside>
-        </>
-      )}
-
-      {panel === 'profile' && talent && talentProg && (
-        <>
-          <div className="scrim" onClick={() => setPanel(null)} />
-          <aside className="sheet prof" role="dialog" aria-modal="true" aria-label={talent.n}>
-            <div className="sheet-h">
-              <h3>{talent.n}</h3>
-              <button
-                type="button"
-                className="iconbtn"
-                onClick={() => setPanel(null)}
-                aria-label="Close"
-              >
-                <Icon name="x" />
-              </button>
-            </div>
-            <Photo slot={`talent-${talent.id}`} idx={talent.p} />
-            <div>
-              <span className="av">
-                <i />
-                {talent.av}
-              </span>
-              <p style={{ fontWeight: 700, fontSize: '1.1rem', marginTop: 4 }}>{talent.role}</p>
-            </div>
-            <p>{talent.bio}</p>
-            <div>
-              <h4 style={{ fontFamily: 'var(--body)', fontSize: '.95rem', marginBottom: 8 }}>
-                Skills
-              </h4>
-              <div className="chips">
-                {talent.skills.map((s) => (
-                  <span key={s} className="tag">
-                    {s}
+                {talent.photoUrl ? (
+                  <div className="photo">
+                    <img src={talent.photoUrl} alt={talent.n} />
+                  </div>
+                ) : (
+                  <Photo slot={`talent-${talent.id}`} idx={talent.p} />
+                )}
+                <div>
+                  <span className="av">
+                    <i />
+                    {talent.av}
                   </span>
-                ))}
-              </div>
-            </div>
-            <div>
-              <h4 style={{ fontFamily: 'var(--body)', fontSize: '.95rem', marginBottom: 8 }}>
-                Signature project
-              </h4>
-              <p className="muted">{talent.proj}</p>
-            </div>
-            <div>
-              <h4 style={{ fontFamily: 'var(--body)', fontSize: '.95rem', marginBottom: 8 }}>
-                Certifications in training
-              </h4>
-              <div className="chips">
-                {talentProg.certs.slice(0, 3).map((c) => (
-                  <span key={c} className="tag">
-                    {c}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-brand"
-                onClick={() => {
-                  triggerConsult(talent.id);
-                  if (pathname !== '/hire-talents') {
-                    navigate('/hire-talents');
-                  } else {
-                    setTimeout(() => {
-                      const c = document.getElementById('consult');
-                      if (c) c.scrollIntoView({ behavior: 'smooth' });
-                    }, 50);
-                  }
-                }}
-              >
-                Request consultation
-              </button>
-              <Link
-                className="btn btn-line"
-                to={`/programmes/${talent.s}`}
-                onClick={() => setPanel(null)}
-              >
-                View programme
-              </Link>
-            </div>
+                  <p style={{ fontWeight: 700, fontSize: '1.1rem', marginTop: 4 }}>{talent.role}</p>
+                </div>
+                <p>{talent.bio}</p>
+                <div>
+                  <h4 style={{ fontFamily: 'var(--body)', fontSize: '.95rem', marginBottom: 8 }}>
+                    Skills
+                  </h4>
+                  <div className="chips">
+                    {talent.skills.map((s) => (
+                      <span key={s} className="tag">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h4 style={{ fontFamily: 'var(--body)', fontSize: '.95rem', marginBottom: 8 }}>
+                    Signature project
+                  </h4>
+                  <p className="muted">{talent.proj}</p>
+                </div>
+                {talentProg && talentProg.certs.length > 0 ? (
+                  <div>
+                    <h4 style={{ fontFamily: 'var(--body)', fontSize: '.95rem', marginBottom: 8 }}>
+                      Certifications in training
+                    </h4>
+                    <div className="chips">
+                      {talentProg.certs.slice(0, 3).map((c) => (
+                        <span key={c} className="tag">
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-brand"
+                    onClick={() => {
+                      triggerConsult(talent.id);
+                      if (pathname !== '/hire-talents') {
+                        navigate('/hire-talents');
+                      } else {
+                        setTimeout(() => {
+                          const c = document.getElementById('consult');
+                          if (c) c.scrollIntoView({ behavior: 'smooth' });
+                        }, 50);
+                      }
+                    }}
+                  >
+                    Request consultation
+                  </button>
+                  <Link
+                    className="btn btn-line"
+                    to={`/programmes/${talent.s}`}
+                    onClick={() => setPanel(null)}
+                  >
+                    View programme
+                  </Link>
+                </div>
+              </>
+            ) : null}
           </aside>
         </>
       )}

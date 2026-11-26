@@ -135,6 +135,63 @@ export class HttpClient {
     return this.request<T>('POST', path, body, headers);
   }
 
+  /**
+   * Perform a multipart/form-data POST request (e.g. file/CV uploads).
+   * Intentionally omits Content-Type so the browser sets the multipart boundary.
+   */
+  async postForm<T>(
+    path: string,
+    formData: FormData,
+    customHeaders?: HeadersInit,
+  ): Promise<T> {
+    const token = this.getToken();
+    const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...customHeaders,
+        },
+        body: formData,
+      });
+    } catch {
+      throw new ApiError(
+        'We couldn’t reach the server. Please check your connection and try again.',
+        0,
+      );
+    }
+
+    const text = await res.text();
+    let payload: unknown;
+    if (text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = text;
+      }
+    }
+
+    if (!res.ok) {
+      const envelope = payload as Partial<ApiEnvelope<unknown>> | null | undefined;
+      throw new ApiError(
+        envelope?.message || fallbackMessage(res.status),
+        res.status,
+        normalizeErrors(envelope?.errors),
+        payload,
+      );
+    }
+
+    if (payload && typeof payload === 'object' && 'data' in payload) {
+      return (payload as ApiEnvelope<T>).data as T;
+    }
+
+    return payload as T;
+  }
+
   put<T>(path: string, body?: unknown, headers?: HeadersInit) {
     return this.request<T>('PUT', path, body, headers);
   }

@@ -26,12 +26,24 @@ export const ENDPOINTS = {
     detail: (code: string) => `/scholarships/${code}`,
   },
   talents: {
-    list: '/talents',
-    detail: (id: string) => `/talents/${id}`,
+    list: '/talent',
+    detail: (code: string) => `/talent/${encodeURIComponent(code)}`,
   },
   applications: {
     submit: '/applications',
     status: (ref: string) => `/applications/status/${ref}`,
+    initiatePayment: (applicationRef: string) =>
+      `/applications/${encodeURIComponent(applicationRef)}/payments`,
+  },
+  promoCodes: {
+    validate: '/promo-codes/validate',
+  },
+  payments: {
+    status: (paymentRef: string) => `/payments/${encodeURIComponent(paymentRef)}`,
+    verify: (paymentRef: string) => `/payments/${encodeURIComponent(paymentRef)}/verify`,
+    transferMade: (paymentRef: string) =>
+      `/payments/${encodeURIComponent(paymentRef)}/transfer-made`,
+    receipt: (paymentRef: string) => `/payments/${encodeURIComponent(paymentRef)}/receipt`,
   },
   consultations: {
     request: '/consultations',
@@ -41,10 +53,28 @@ export const ENDPOINTS = {
     corporate: '/corporate-proposals',
   },
   hub: {
+    overview: '/hub',
     spaces: '/hub/spaces',
-    reserve: '/hub/reservations',
+    spaceDetail: (slug: string) => `/hub/spaces/${encodeURIComponent(slug)}`,
+    quote: '/hub/quote',
+    bookings: '/hub/bookings',
   },
   careers: {
-    apply: '/careers/apply',
+    roles: '/careers/roles',
+    roleDetail: (code: string) => `/careers/roles/${encodeURIComponent(code)}`,
+    apply: '/careers/applications',
+  },
+  kids: {
+    content: '/kids',
+    register: '/kids/registrations',
+  },
+  corporate: {
+    overview: '/corporate',
+    request: '/corporate/requests',
+  },
+  blog: {
+    list: '/blog',
+    categories: '/blog/categories',
+    detail: (slug: string) => `/blog/${encodeURIComponent(slug)}`,
   },
 } as const;
