@@ -99,6 +99,8 @@ export interface BlogPost {
   v: number; // cover image variant seed
   ex: string;
   body: BlogBlock[];
+  coverUrl?: string | null;
+  authorName?: string;
 }
 
 export interface HubSpace {

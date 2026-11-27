@@ -56,6 +56,7 @@ export default function ProgramsPage() {
     reset: resetRecommendations,
     data: apiRecommendations,
     isPending: isRecommending,
+    isError: isRecommendError,
   } = useRecommendProgrammesMutation();
 
   useEffect(() => {
@@ -68,18 +69,33 @@ export default function ProgramsPage() {
     }
   }, [finderScrollKey]);
 
-  // Trigger POST /programmes/recommend whenever both finder questions are answered
-  useEffect(() => {
-    if (a1 && a2) {
-      const interestSlug = INTEREST_TO_API_SLUG[a1] || a1;
+  const triggerRecommend = (nextA1: string | null, nextA2: string | null) => {
+    if (nextA1 && nextA2) {
+      const interestSlug = INTEREST_TO_API_SLUG[nextA1] || nextA1;
       fetchRecommendations({
         interest: interestSlug,
-        technical_level: Number(a2),
+        technical_level: Number(nextA2),
       });
     } else {
       resetRecommendations();
     }
-  }, [a1, a2, fetchRecommendations, resetRecommendations]);
+  };
+
+  const handleSelectInterest = (v: string) => {
+    setA1(v);
+    triggerRecommend(v, a2);
+  };
+
+  const handleSelectTech = (v: string) => {
+    setA2(v);
+    triggerRecommend(a1, v);
+  };
+
+  const handleResetFinder = () => {
+    setA1(null);
+    setA2(null);
+    resetRecommendations();
+  };
 
   const categories = useMemo(() => {
     if (apiCategories && apiCategories.length > 0) {
@@ -108,7 +124,10 @@ export default function ProgramsPage() {
 
   const recommendedTracks = useMemo<Track[]>(() => {
     if (apiRecommendations && apiRecommendations.length > 0) {
-      return apiRecommendations.slice(0, 3).map(mapApiSummaryToTrack);
+      return [...apiRecommendations]
+        .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
+        .slice(0, 3)
+        .map(mapApiSummaryToTrack);
     }
     return localRecommend;
   }, [apiRecommendations, localRecommend]);
@@ -180,7 +199,7 @@ export default function ProgramsPage() {
                     key={v}
                     type="button"
                     className={`chip ${a1 === v ? 'on' : ''}`.trim()}
-                    onClick={() => setA1(v)}
+                    onClick={() => handleSelectInterest(v)}
                   >
                     {l}
                   </button>
@@ -195,7 +214,7 @@ export default function ProgramsPage() {
                     key={v}
                     type="button"
                     className={`chip ${a2 === v ? 'on' : ''}`.trim()}
-                    onClick={() => setA2(v)}
+                    onClick={() => handleSelectTech(v)}
                   >
                     {l}
                   </button>
@@ -211,7 +230,7 @@ export default function ProgramsPage() {
                     : 'One more question to go.'}
                 </p>
               </div>
-            ) : isRecommending ? (
+            ) : isRecommending || (!apiRecommendations && !isRecommendError) ? (
               <div className="match" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <Spinner size="sm" variant="brand" label="Finding best matches..." />
                 <span className="muted">Finding your best matches...</span>
@@ -232,10 +251,7 @@ export default function ProgramsPage() {
                   <button
                     type="button"
                     className="btn btn-line btn-sm"
-                    onClick={() => {
-                      setA1(null);
-                      setA2(null);
-                    }}
+                    onClick={handleResetFinder}
                   >
                     Start over
                   </button>

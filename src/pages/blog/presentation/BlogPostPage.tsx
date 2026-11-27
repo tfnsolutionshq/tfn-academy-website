@@ -1,19 +1,42 @@
+import { useMemo } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { BLOG } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
 import { BlogCard, BlogCover } from '@/shared/components/ui/Illustrations';
+import { GlobalLoading } from '@/shared/components/ui/Loading';
 import { useSite } from '@/shared/context/SiteContext';
+import {
+  mapApiBlogDetailToPost,
+  mapApiBlogSummaryToPost,
+  useBlogPostDetailQuery,
+} from '@/hooks/queries';
 
 export default function BlogPostPage() {
   const { slug } = useParams<{ slug: string }>();
   const { startApplyNew } = useSite();
 
-  const b = BLOG.find((x) => x.slug === slug);
+  const { data: apiDetail, isLoading: isDetailLoading } = useBlogPostDetailQuery(slug);
+
+  const staticPost = useMemo(() => BLOG.find((x) => x.slug === slug), [slug]);
+  const b = useMemo(() => {
+    if (apiDetail) return mapApiBlogDetailToPost(apiDetail);
+    return staticPost;
+  }, [apiDetail, staticPost]);
+
+  const more = useMemo(() => {
+    if (apiDetail?.related_posts && apiDetail.related_posts.length > 0) {
+      return apiDetail.related_posts.slice(0, 3).map(mapApiBlogSummaryToPost);
+    }
+    return BLOG.filter((x) => x.slug !== slug).slice(0, 3);
+  }, [apiDetail?.related_posts, slug]);
+
+  if (isDetailLoading && !b) {
+    return <GlobalLoading message="Loading article..." />;
+  }
+
   if (!b) {
     return <Navigate to="/blog" replace />;
   }
-
-  const more = BLOG.filter((x) => x.slug !== slug).slice(0, 3);
 
   return (
     <>
@@ -30,7 +53,7 @@ export default function BlogPostPage() {
             <div className="bmeta">
               <span className="pill ac">{b.cat}</span>
               <span>{b.read}</span>
-              <span>By the TFN Academy team</span>
+              <span>By {b.authorName || 'the TFN Academy team'}</span>
             </div>
             <h1>{b.t}</h1>
             <p className="lede">{b.ex}</p>
@@ -76,4 +99,3 @@ export default function BlogPostPage() {
     </>
   );
 }
-

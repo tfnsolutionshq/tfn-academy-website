@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EMAIL_REGEX, KIDS, KID_AGES, NG_PHONE_REGEX } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
-import { CustomDropdown, OdTag, Photo } from '@/shared/components/ui/Illustrations';
+import { CustomDropdown, Photo } from '@/shared/components/ui/Illustrations';
+import { Skeleton, Spinner } from '@/shared/components/ui/Loading';
 import { useToast } from '@/shared/context/ToastContext';
+import { useKidsContentQuery, useKidsRegistrationMutation } from '@/hooks/queries';
 
 const KIDS_STEPS: Array<[title: string, desc: string]> = [
   ['Register interest', 'Tell us about your child and the programme they like.'],
@@ -21,14 +23,54 @@ const INITIAL_KIDS = {
   consent: false,
 };
 
+const toSlug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/&/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
 export default function KidsPage() {
   const { showToast } = useToast();
   const [form, setForm] = useState(INITIAL_KIDS);
   const [err, setErr] = useState<Record<string, string>>({});
+  const [submitErr, setSubmitErr] = useState('');
   const [sent, setSent] = useState(false);
+
+  const { data: apiKids, isLoading: isKidsLoading } = useKidsContentQuery();
+  const { mutateAsync: registerKids, isPending: isSubmitting } = useKidsRegistrationMutation();
+
+  const ageGroups = useMemo(() => {
+    if (apiKids?.age_groups && apiKids.age_groups.length > 0) {
+      return apiKids.age_groups;
+    }
+    return KID_AGES;
+  }, [apiKids?.age_groups]);
+
+  const kidsProgrammes = useMemo(() => {
+    if (apiKids?.programmes && apiKids.programmes.length > 0) {
+      return [...apiKids.programmes]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((p) => ({
+          slug: p.slug,
+          name: p.name,
+          description: p.description,
+          icon: p.icon || 'code',
+          tags: p.tags || [],
+        }));
+    }
+    return KIDS.map((k) => ({
+      slug: toSlug(k.t),
+      name: k.t,
+      description: k.d,
+      icon: k.ic,
+      tags: k.tags,
+    }));
+  }, [apiKids?.programmes]);
 
   const updateField = (key: keyof typeof INITIAL_KIDS, val: string | boolean) => {
     setForm((prev) => ({ ...prev, [key]: val }));
+    setSubmitErr('');
     setErr((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
@@ -37,7 +79,22 @@ export default function KidsPage() {
     });
   };
 
-  const handleSubmit = () => {
+  const focusFirstError = () => {
+    setTimeout(() => {
+      const firstErr = document.querySelector<HTMLElement>(
+        '.fld.err .inp, .fld.err .dd-btn, .check.err input',
+      );
+      if (firstErr) {
+        firstErr.scrollIntoView({ block: 'center' });
+        firstErr.focus({ preventScroll: true });
+      }
+    }, 20);
+  };
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+    setSubmitErr('');
+
     const e: Record<string, string> = {};
     if (form.parent.trim().split(/\s+/).length < 2) {
       e.parent = 'Enter the parent or guardian’s first and last name.';
@@ -54,19 +111,44 @@ export default function KidsPage() {
     if (!form.consent) e.consent = 'Tick the box so we can contact you.';
 
     setErr(e);
-    if (!Object.keys(e).length) {
+    if (Object.keys(e).length > 0) {
+      focusFirstError();
+      return;
+    }
+
+    try {
+      await registerKids({
+        parent_name: form.parent.trim(),
+        child_first_name: form.child.trim(),
+        email: form.email.trim(),
+        phone: form.phone.replace(/[\s-]/g, ''),
+        age_group: form.age,
+        programme: form.prog,
+        consent: form.consent,
+      });
       setSent(true);
       showToast('Interest registered');
-    } else {
-      setTimeout(() => {
-        const firstErr = document.querySelector<HTMLElement>(
-          '.fld.err .inp, .fld.err .dd-btn, .check.err input',
-        );
-        if (firstErr) {
-          firstErr.scrollIntoView({ block: 'center' });
-          firstErr.focus({ preventScroll: true });
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string; errors?: Record<string, string[]> };
+      if (apiErr?.errors && Object.keys(apiErr.errors).length > 0) {
+        const fieldMap: Record<string, string> = {
+          parent_name: 'parent',
+          child_first_name: 'child',
+          age_group: 'age',
+          programme: 'prog',
+        };
+        const mapped: Record<string, string> = {};
+        for (const [k, msgs] of Object.entries(apiErr.errors)) {
+          if (msgs && msgs.length > 0) {
+            mapped[fieldMap[k] || k] = msgs[0];
+          }
         }
-      }, 20);
+        setErr(mapped);
+        focusFirstError();
+      }
+      const msg = apiErr?.message || 'Could not submit registration. Please try again.';
+      setSubmitErr(msg);
+      showToast(msg);
     }
   };
 
@@ -98,9 +180,6 @@ export default function KidsPage() {
                 Register interest <Icon name="arrow-right" className="arr" />
               </a>
             </div>
-            <div className="review-only">
-              <OdTag id="OD-06" />
-            </div>
           </div>
           <div className="kidspics">
             <Photo slot="kids1" idx={10} className="arch" />
@@ -113,23 +192,39 @@ export default function KidsPage() {
         <div className="wrap">
           <div className="head">
             <h2>What young learners can explore</h2>
-            <p>Programmes are designed for two age bands: Kids (7 to 12) and Teens (13 to 17).</p>
+            <p>
+              Programmes are designed for {ageGroups.length} age bands:{' '}
+              {ageGroups.join(' and ')}.
+            </p>
           </div>
           <div className="kgrid">
-            {KIDS.map((k) => (
-              <div key={k.t} className="kcard">
-                <Icon name={k.ic} />
-                <h3>{k.t}</h3>
-                <p>{k.d}</p>
-                <div className="tags" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {k.tags.map((x) => (
-                    <span key={x} className="tag">
-                      {x}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
+            {isKidsLoading && !apiKids
+              ? Array.from({ length: 6 }).map((_, idx) => (
+                  <div key={idx} className="kcard" style={{ display: 'grid', gap: 12 }}>
+                    <Skeleton width="36px" height="36px" radius="10px" />
+                    <Skeleton width="65%" height="22px" radius="6px" />
+                    <Skeleton width="100%" height="14px" radius="4px" />
+                    <Skeleton width="80%" height="14px" radius="4px" />
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <Skeleton width="60px" height="22px" radius="999px" />
+                      <Skeleton width="72px" height="22px" radius="999px" />
+                    </div>
+                  </div>
+                ))
+              : kidsProgrammes.map((k) => (
+                  <div key={k.slug} className="kcard">
+                    <Icon name={k.icon} />
+                    <h3>{k.name}</h3>
+                    <p>{k.description}</p>
+                    <div className="tags" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {k.tags.map((x) => (
+                        <span key={x} className="tag">
+                          {x}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
           </div>
         </div>
       </section>
@@ -176,6 +271,7 @@ export default function KidsPage() {
                     onClick={() => {
                       setForm(INITIAL_KIDS);
                       setErr({});
+                      setSubmitErr('');
                       setSent(false);
                     }}
                   >
@@ -276,7 +372,7 @@ export default function KidsPage() {
                         id="kids.age"
                         value={form.age}
                         onChange={(v) => updateField('age', v)}
-                        options={KID_AGES.map((a) => ({ v: a, l: a }))}
+                        options={ageGroups.map((a) => ({ v: a, l: a }))}
                         placeholder="Choose an age group"
                       />
                       {err.age ? (
@@ -293,7 +389,11 @@ export default function KidsPage() {
                         id="kids.prog"
                         value={form.prog}
                         onChange={(v) => updateField('prog', v)}
-                        options={KIDS.map((k) => ({ v: k.t, l: k.t, ic: k.ic }))}
+                        options={kidsProgrammes.map((k) => ({
+                          v: k.slug,
+                          l: k.name,
+                          ic: k.icon,
+                        }))}
                         placeholder="Choose a programme"
                       />
                       {err.prog ? (
@@ -329,9 +429,30 @@ export default function KidsPage() {
                     </span>
                   ) : null}
 
+                  {submitErr ? (
+                    <span className="emsg">
+                      <Icon name="circle-alert" />
+                      {submitErr}
+                    </span>
+                  ) : null}
+
                   <div>
-                    <button type="button" className="btn btn-brand" onClick={handleSubmit}>
-                      Register interest <Icon name="arrow-right" className="arr" />
+                    <button
+                      type="button"
+                      className="btn btn-brand"
+                      disabled={isSubmitting}
+                      onClick={handleSubmit}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Spinner size="xs" variant="white" label="Submitting..." />
+                          Submitting...
+                        </>
+                      ) : (
+                        <>
+                          Register interest <Icon name="arrow-right" className="arr" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>

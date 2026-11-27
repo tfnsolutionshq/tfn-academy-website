@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   BUDGETS,
@@ -9,9 +9,16 @@ import {
   findTrack,
 } from '@/shared/constants/academyData';
 import { Icon } from '@/shared/components/ui/Icon';
-import { CustomDropdown, OdTag, Photo } from '@/shared/components/ui/Illustrations';
+import { CustomDropdown, Photo } from '@/shared/components/ui/Illustrations';
+import { Skeleton, Spinner } from '@/shared/components/ui/Loading';
 import { useSite } from '@/shared/context/SiteContext';
 import { useToast } from '@/shared/context/ToastContext';
+import {
+  useConsultationMutation,
+  useProgrammesQuery,
+  useTalentsQuery,
+} from '@/hooks/queries';
+import type { ApiConsultationResponse } from '@/core/api';
 
 const HIRE_STEPS: Array<[title: string, desc: string]> = [
   ['Tell us what you need', 'Share the role, project or skills you are looking for.'],
@@ -29,7 +36,20 @@ const INITIAL_CONSULT = {
   budget: '',
   msg: '',
   talent: '',
+  consent: false,
 };
+
+interface DisplayTalent {
+  code: string;
+  name: string;
+  progSlug: string;
+  progShort: string;
+  photoIdx: number;
+  photoUrl: string | null;
+  role: string;
+  skills: string[];
+  availability: string;
+}
 
 export default function HireTalentsPage() {
   const { showToast } = useToast();
@@ -37,76 +57,150 @@ export default function HireTalentsPage() {
 
   const [form, setForm] = useState(INITIAL_CONSULT);
   const [err, setErr] = useState<Record<string, string>>({});
-  const [sent, setSent] = useState(false);
+  const [submitErr, setSubmitErr] = useState('');
+  const [submitted, setSubmitted] = useState<ApiConsultationResponse | null>(null);
+
+  const { data: allTalentsPage, isLoading: isAllLoading } = useTalentsQuery({ per_page: 50 });
+  const { data: filteredTalentsPage, isFetching: isFilterFetching } = useTalentsQuery(
+    hireNiche !== 'all' ? { programme: hireNiche, per_page: 50 } : { per_page: 50 },
+  );
+  const { data: apiProgrammesPage } = useProgrammesQuery({ per_page: 50 });
+  const { mutateAsync: submitConsultation, isPending: isSubmitting } =
+    useConsultationMutation();
+
+  const allTalents = useMemo<DisplayTalent[]>(() => {
+    if (allTalentsPage?.data && allTalentsPage.data.length > 0) {
+      return allTalentsPage.data.map((t, idx) => {
+        const local = TALENT.find((x) => x.id === t.code);
+        return {
+          code: t.code,
+          name: t.name,
+          progSlug: t.programme?.slug || local?.s || 'frontend',
+          progShort: t.programme?.short_name || findTrack(t.programme?.slug || '')?.short || '',
+          photoIdx: local?.p ?? idx % 13,
+          photoUrl: t.photo_url,
+          role: t.role_title,
+          skills: t.skills || [],
+          availability: t.availability,
+        };
+      });
+    }
+    return TALENT.map((t) => ({
+      code: t.id,
+      name: t.n,
+      progSlug: t.s,
+      progShort: findTrack(t.s)?.short || t.s,
+      photoIdx: t.p,
+      photoUrl: null,
+      role: t.role,
+      skills: t.skills,
+      availability: t.av,
+    }));
+  }, [allTalentsPage?.data]);
+
+  const filteredTalent = useMemo<DisplayTalent[]>(() => {
+    if (filteredTalentsPage?.data) {
+      return filteredTalentsPage.data.map((t, idx) => {
+        const local = TALENT.find((x) => x.id === t.code);
+        return {
+          code: t.code,
+          name: t.name,
+          progSlug: t.programme?.slug || local?.s || 'frontend',
+          progShort: t.programme?.short_name || findTrack(t.programme?.slug || '')?.short || '',
+          photoIdx: local?.p ?? idx % 13,
+          photoUrl: t.photo_url,
+          role: t.role_title,
+          skills: t.skills || [],
+          availability: t.availability,
+        };
+      });
+    }
+    return allTalents.filter((t) => hireNiche === 'all' || t.progSlug === hireNiche);
+  }, [allTalents, filteredTalentsPage?.data, hireNiche]);
 
   useEffect(() => {
     if (consultPreset.key > 0) {
-      const tId = consultPreset.talentId;
-      const tRec = tId ? TALENT.find((x) => x.id === tId) : undefined;
-      const tProg = tRec ? findTrack(tRec.s) : undefined;
+      const tCode = consultPreset.talentId;
+      const tRec = tCode ? allTalents.find((x) => x.code === tCode) : undefined;
       setForm((prev) => ({
         ...prev,
-        talent: tId,
-        need: tProg ? tProg.short : prev.need,
+        talent: tCode,
+        need: tRec ? tRec.progSlug : prev.need,
       }));
-      if (tProg) {
+      if (tRec) {
         setErr((prev) => {
           const next = { ...prev };
           delete next.need;
           return next;
         });
       }
-      setSent(false);
+      setSubmitted(null);
       setTimeout(() => {
         const c = document.getElementById('consult');
         if (c) c.scrollIntoView({ behavior: 'smooth' });
       }, 100);
     }
-  }, [consultPreset]);
+  }, [consultPreset, allTalents]);
 
-  const slugs = Array.from(new Set(TALENT.map((t) => t.s)));
-  const chipOptions: Array<[id: string, label: string]> = [
-    ['all', 'All niches'],
-    ...slugs.map((s): [string, string] => [s, findTrack(s)?.short || s]),
-  ];
+  const chipOptions = useMemo<Array<[id: string, label: string]>>(() => {
+    const seen = new Map<string, string>();
+    for (const t of allTalents) {
+      if (!seen.has(t.progSlug)) {
+        seen.set(t.progSlug, t.progShort || findTrack(t.progSlug)?.short || t.progSlug);
+      }
+    }
+    return [['all', 'All niches'], ...Array.from(seen.entries())];
+  }, [allTalents]);
 
-  const filteredTalent = TALENT.filter((t) => hireNiche === 'all' || t.s === hireNiche);
+  const talentOpts = useMemo(
+    () => [
+      ...allTalents.map((t) => {
+        const tr = findTrack(t.progSlug);
+        return {
+          v: t.code,
+          l: t.name,
+          r: t.role,
+          ic: tr?.ic || 'user-check',
+        };
+      }),
+      { v: 'any', l: 'No specific talent (match me)', ic: 'users' },
+    ],
+    [allTalents],
+  );
 
-  const talentOpts = [
-    ...TALENT.map((t) => {
-      const tr = findTrack(t.s);
-      return {
-        v: t.id,
-        l: t.n,
-        r: t.role,
-        ic: tr?.ic || 'user-check',
-      };
-    }),
-    { v: 'any', l: 'No specific talent (match me)', ic: 'users' },
-  ];
+  const needOpts = useMemo(() => {
+    const progs =
+      apiProgrammesPage?.data && apiProgrammesPage.data.length > 0
+        ? apiProgrammesPage.data.map((p) => ({
+            v: p.slug,
+            l: p.short_name,
+            ic: p.icon || 'blocks',
+            g: findCategory(p.category)?.name || p.category,
+          }))
+        : TRACKS.map((t) => ({
+            v: t.slug,
+            l: t.short,
+            ic: t.ic,
+            g: findCategory(t.cat)?.name,
+          }));
+    return [
+      ...progs,
+      { v: 'Not sure yet', l: 'Not sure yet, advise me', ic: 'compass', g: 'Other' },
+    ];
+  }, [apiProgrammesPage?.data]);
 
-  const needOpts = [
-    ...TRACKS.map((t) => ({
-      v: t.short,
-      l: t.short,
-      ic: t.ic,
-      g: findCategory(t.cat)?.name,
-    })),
-    { v: 'Not sure yet', l: 'Not sure yet, advise me', ic: 'compass', g: 'Other' },
-  ];
-
-  const selectedTalent = form.talent ? TALENT.find((t) => t.id === form.talent) : null;
+  const selectedTalent = form.talent ? allTalents.find((t) => t.code === form.talent) : null;
 
   const handleTalentChange = (val: string) => {
-    const talentId = val === 'any' ? '' : val;
-    const tRec = talentId ? TALENT.find((x) => x.id === talentId) : undefined;
-    const tProg = tRec ? findTrack(tRec.s) : undefined;
+    const talentCode = val === 'any' ? '' : val;
+    const tRec = talentCode ? allTalents.find((x) => x.code === talentCode) : undefined;
     setForm((prev) => ({
       ...prev,
-      talent: talentId,
-      need: tProg ? tProg.short : prev.need,
+      talent: talentCode,
+      need: tRec ? tRec.progSlug : prev.need,
     }));
-    if (tProg) {
+    setSubmitErr('');
+    if (tRec) {
       setErr((prev) => {
         if (!prev.need) return prev;
         const next = { ...prev };
@@ -116,8 +210,12 @@ export default function HireTalentsPage() {
     }
   };
 
-  const updateField = (key: keyof typeof INITIAL_CONSULT, val: string) => {
+  const updateField = <K extends keyof typeof INITIAL_CONSULT>(
+    key: K,
+    val: (typeof INITIAL_CONSULT)[K],
+  ) => {
     setForm((prev) => ({ ...prev, [key]: val }));
+    setSubmitErr('');
     setErr((prev) => {
       if (!prev[key]) return prev;
       const next = { ...prev };
@@ -126,7 +224,22 @@ export default function HireTalentsPage() {
     });
   };
 
-  const handleSubmit = () => {
+  const focusFirstError = () => {
+    setTimeout(() => {
+      const firstErr = document.querySelector<HTMLElement>(
+        '.fld.err .inp, .fld.err .dd-btn, .check.err input',
+      );
+      if (firstErr) {
+        firstErr.scrollIntoView({ block: 'center' });
+        firstErr.focus({ preventScroll: true });
+      }
+    }, 20);
+  };
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return;
+    setSubmitErr('');
+
     const e: Record<string, string> = {};
     if (!form.name.trim()) e.name = 'Enter your name.';
     if (!form.company.trim()) e.company = 'Enter your company or organisation.';
@@ -142,25 +255,56 @@ export default function HireTalentsPage() {
     if (form.msg.trim().length < 10) {
       e.msg = 'Write at least a short sentence so we can help.';
     }
+    if (!form.consent) {
+      e.consent = 'Tick the box so our team can contact you about your consultation.';
+    }
 
     setErr(e);
-    if (!Object.keys(e).length) {
-      setSent(true);
+    if (Object.keys(e).length > 0) {
+      focusFirstError();
+      return;
+    }
+
+    try {
+      const res = await submitConsultation({
+        name: form.name.trim(),
+        company: form.company.trim(),
+        email: form.email.trim(),
+        phone: form.phone.replace(/[\s-]/g, ''),
+        need: form.need,
+        engagement_type: form.type,
+        budget_range: form.budget,
+        message: form.msg.trim(),
+        ...(form.talent ? { talent_code: form.talent } : {}),
+        consent: form.consent,
+      });
+      setSubmitted(res);
       showToast('Consultation requested');
       setTimeout(() => {
         const c = document.getElementById('consult');
         if (c) c.scrollIntoView({ block: 'center' });
       }, 20);
-    } else {
-      setTimeout(() => {
-        const firstErr = document.querySelector<HTMLElement>(
-          '.fld.err .inp, .fld.err .dd-btn, .check.err input',
-        );
-        if (firstErr) {
-          firstErr.scrollIntoView({ block: 'center' });
-          firstErr.focus({ preventScroll: true });
+    } catch (error: unknown) {
+      const apiErr = error as { message?: string; errors?: Record<string, string[]> };
+      if (apiErr?.errors && Object.keys(apiErr.errors).length > 0) {
+        const fieldMap: Record<string, string> = {
+          engagement_type: 'type',
+          budget_range: 'budget',
+          message: 'msg',
+          talent_code: 'talent',
+        };
+        const mapped: Record<string, string> = {};
+        for (const [k, msgs] of Object.entries(apiErr.errors)) {
+          if (msgs && msgs.length > 0) {
+            mapped[fieldMap[k] || k] = msgs[0];
+          }
         }
-      }, 20);
+        setErr(mapped);
+        focusFirstError();
+      }
+      const msg = apiErr?.message || 'Could not submit consultation request. Please try again.';
+      setSubmitErr(msg);
+      showToast(msg);
     }
   };
 
@@ -197,16 +341,13 @@ export default function HireTalentsPage() {
                 onClick={(e) => {
                   e.preventDefault();
                   setForm((prev) => ({ ...prev, talent: '' }));
-                  setSent(false);
+                  setSubmitted(null);
                   const el = document.getElementById('consult');
                   if (el) el.scrollIntoView({ behavior: 'smooth' });
                 }}
               >
                 Request a consultation
               </a>
-            </div>
-            <div className="review-only">
-              <OdTag id="OD-07" />
             </div>
           </div>
           <Photo slot="hire" idx={5} className="arch" />
@@ -259,10 +400,10 @@ export default function HireTalentsPage() {
                 Browse graduate profiles by niche. Request a consultation when you find someone who
                 fits.
               </p>
-              <div className="review-only">
-                <OdTag id="OD-05" />
-              </div>
             </div>
+            {isFilterFetching && !isAllLoading ? (
+              <Spinner size="xs" variant="muted" label="Updating talent list..." />
+            ) : null}
           </div>
 
           <div className="tabs-scroll" id="hirechips">
@@ -280,50 +421,70 @@ export default function HireTalentsPage() {
 
           <div id="tgrid">
             <div className="talent">
-              {filteredTalent.map((t) => {
-                const extra = t.skills.length - 2;
-                return (
-                  <div
-                    key={t.id}
-                    className="tcardx"
-                    tabIndex={0}
-                    role="button"
-                    aria-label={`View ${t.n}’s profile`}
-                    onClick={() => openTalentProfile(t.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        openTalentProfile(t.id);
-                      }
-                    }}
-                  >
-                    <Photo slot={`talent-${t.id}`} idx={t.p} />
-                    <span className="av badge">
-                      <i />
-                      {t.av}
-                    </span>
-                    <div className="tb">
-                      <h3>{t.n}</h3>
-                      <span className="trole">{t.role}</span>
-                      <div className="tags">
-                        {t.skills.slice(0, 2).map((s) => (
-                          <span key={s} className="tag">
-                            {s}
-                          </span>
-                        ))}
-                        {extra > 0 ? (
-                          <span className="tag more" title="See all skills in the profile">
-                            +{extra} more
-                          </span>
-                        ) : null}
+              {isAllLoading && !allTalentsPage
+                ? Array.from({ length: 6 }).map((_, idx) => (
+                    <div key={idx} className="tcardx" style={{ pointerEvents: 'none' }}>
+                      <Skeleton height="220px" radius="16px" />
+                      <div className="tb" style={{ display: 'grid', gap: 10 }}>
+                        <Skeleton width="65%" height="20px" radius="6px" />
+                        <Skeleton width="50%" height="14px" radius="4px" />
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <Skeleton width="64px" height="22px" radius="999px" />
+                          <Skeleton width="76px" height="22px" radius="999px" />
+                        </div>
                       </div>
-                      <span className="go">
-                        View profile <Icon name="arrow-right" />
-                      </span>
                     </div>
-                  </div>
-                );
-              })}
+                  ))
+                : filteredTalent.map((t) => {
+                    const extra = t.skills.length - 2;
+                    return (
+                      <div
+                        key={t.code}
+                        className="tcardx"
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`View ${t.name}’s profile`}
+                        onClick={() => openTalentProfile(t.code)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            openTalentProfile(t.code);
+                          }
+                        }}
+                      >
+                        {t.photoUrl ? (
+                          <div className="photo">
+                            <img src={t.photoUrl} alt={t.name} loading="lazy" />
+                          </div>
+                        ) : (
+                          <Photo slot={`talent-${t.code}`} idx={t.photoIdx} />
+                        )}
+                        <span className="av badge">
+                          <i />
+                          {t.availability}
+                        </span>
+                        <div className="tb">
+                          <h3>{t.name}</h3>
+                          <span className="trole">{t.role}</span>
+                          <div className="tags">
+                            {t.skills.slice(0, 2).map((s) => (
+                              <span key={s} className="tag">
+                                {s}
+                              </span>
+                            ))}
+                            {extra > 0 ? (
+                              <span className="tag more" title="See all skills in the profile">
+                                +{extra} more
+                              </span>
+                            ) : null}
+                          </div>
+                          <span className="go">
+                            View profile <Icon name="arrow-right" />
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
             </div>
           </div>
         </div>
@@ -351,7 +512,7 @@ export default function HireTalentsPage() {
       <section className="sec" id="consult">
         <div className="wrap" style={{ maxWidth: 860 }}>
           <div className="panel">
-            {sent ? (
+            {submitted ? (
               <>
                 <div className="okmark">
                   <Icon name="check" />
@@ -361,6 +522,29 @@ export default function HireTalentsPage() {
                   Thank you, {form.name.split(' ')[0]}. Our team will contact you at {form.email} to
                   discuss your needs.
                 </p>
+                {submitted.reference ? (
+                  <div className="ref">
+                    <Icon name="flag" />
+                    <span>{submitted.reference}</span>
+                    <button
+                      type="button"
+                      className="iconbtn sm"
+                      aria-label="Copy consultation reference"
+                      title="Copy consultation reference"
+                      onClick={() => {
+                        (navigator.clipboard
+                          ? navigator.clipboard.writeText(submitted.reference)
+                          : Promise.reject()
+                        ).then(
+                          () => showToast('Reference copied'),
+                          () => showToast('Copy not available. Please copy it manually.'),
+                        );
+                      }}
+                    >
+                      <Icon name="copy" />
+                    </button>
+                  </div>
+                ) : null}
                 <div className="wnav">
                   <a
                     className="btn btn-line"
@@ -379,7 +563,8 @@ export default function HireTalentsPage() {
                     onClick={() => {
                       setForm(INITIAL_CONSULT);
                       setErr({});
-                      setSent(false);
+                      setSubmitErr('');
+                      setSubmitted(null);
                     }}
                   >
                     Send another request
@@ -392,7 +577,7 @@ export default function HireTalentsPage() {
                 <p className="muted">
                   {selectedTalent ? (
                     <>
-                      You are asking about <b>{selectedTalent.n}</b>, {selectedTalent.role}.{' '}
+                      You are asking about <b>{selectedTalent.name}</b>, {selectedTalent.role}.{' '}
                     </>
                   ) : null}
                   Tell us about your business and what you need.
@@ -564,9 +749,54 @@ export default function HireTalentsPage() {
                     ) : null}
                   </div>
 
+                  <label
+                    className={`check ${form.consent ? 'on' : ''} ${err.consent ? 'err' : ''}`.trim()}
+                  >
+                    <input
+                      type="checkbox"
+                      id="consult-consent"
+                      checked={form.consent}
+                      onChange={(e) => updateField('consent', e.target.checked)}
+                    />
+                    <span>
+                      <b>
+                        I agree that TFN Academy can use these details to contact me regarding
+                        hiring talent.
+                      </b>
+                      <span>We only use them to follow up on your consultation request.</span>
+                    </span>
+                  </label>
+                  {err.consent ? (
+                    <span className="emsg">
+                      <Icon name="circle-alert" />
+                      {err.consent}
+                    </span>
+                  ) : null}
+
+                  {submitErr ? (
+                    <span className="emsg">
+                      <Icon name="circle-alert" />
+                      {submitErr}
+                    </span>
+                  ) : null}
+
                   <div>
-                    <button type="button" className="btn btn-brand" onClick={handleSubmit}>
-                      Request consultation <Icon name="arrow-right" className="arr" />
+                    <button
+                      type="button"
+                      className="btn btn-brand"
+                      disabled={isSubmitting}
+                      onClick={handleSubmit}
+                    >
+                      {isSubmitting ? (
+                        <>
+                          <Spinner size="xs" variant="white" label="Submitting request..." />
+                          Submitting...
+                        </>
+                      ) : (
+                        <>
+                          Request consultation <Icon name="arrow-right" className="arr" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
