@@ -3,6 +3,7 @@ import type {
   ApiProgrammeCategory,
   ApiProgrammeDetail,
   ApiProgrammeListParams,
+  ApiProgrammeRecommendation,
   ApiProgrammeRecommendPayload,
   ApiProgrammeSummary,
   PaginatedResponse,
@@ -66,9 +67,13 @@ export const programmeService = {
    */
   recommend: async (
     payload: ApiProgrammeRecommendPayload,
-  ): Promise<ApiProgrammeSummary[]> => {
+  ): Promise<ApiProgrammeRecommendation[]> => {
     const res = await httpClient.post<
-      ApiProgrammeSummary[] | { recommendations?: ApiProgrammeSummary[]; programmes?: ApiProgrammeSummary[] }
+      | ApiProgrammeRecommendation[]
+      | {
+          recommendations?: ApiProgrammeRecommendation[];
+          programmes?: ApiProgrammeRecommendation[];
+        }
     >(ENDPOINTS.programmes.recommend, payload);
 
     if (Array.isArray(res)) return res;

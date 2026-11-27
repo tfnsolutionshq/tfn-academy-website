@@ -13,3 +13,5 @@ export * from './talent.types';
 export * from './blog.types';
 export * from './career.types';
 export * from './hub.types';
+export * from './certificate.types';
+export * from './contact.types';

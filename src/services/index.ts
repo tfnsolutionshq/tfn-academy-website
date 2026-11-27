@@ -10,3 +10,5 @@ export * from './talent.service';
 export * from './blog.service';
 export * from './career.service';
 export * from './hub.service';
+export * from './certificate.service';
+export * from './contact.service';

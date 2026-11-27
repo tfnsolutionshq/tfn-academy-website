@@ -5,6 +5,7 @@ import type {
   ApiProgrammeCategory,
   ApiProgrammeDetail,
   ApiProgrammeListParams,
+  ApiProgrammeRecommendation,
   ApiProgrammeRecommendPayload,
   ApiProgrammeSummary,
   PaginatedResponse,
@@ -158,7 +159,7 @@ export function useProgrammeDetailQuery(slug?: string) {
  * Recommend programmes (`POST /programmes/recommend`)
  */
 export function useRecommendProgrammesMutation() {
-  return useMutation<ApiProgrammeSummary[], Error, ApiProgrammeRecommendPayload>({
+  return useMutation<ApiProgrammeRecommendation[], Error, ApiProgrammeRecommendPayload>({
     mutationFn: programmeService.recommend,
   });
 }

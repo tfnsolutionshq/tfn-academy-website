@@ -65,4 +65,9 @@ export const queryKeys = {
       [...queryKeys.careers.all, 'roles', department ?? 'all'] as const,
     roleDetail: (code: string) => [...queryKeys.careers.all, 'role', code] as const,
   },
+  certificates: {
+    all: ['certificates'] as const,
+    verify: (number: string) =>
+      [...queryKeys.certificates.all, 'verify', number.trim().toUpperCase()] as const,
+  },
 } as const;

@@ -52,6 +52,10 @@ export const ENDPOINTS = {
     submit: '/contact',
     corporate: '/corporate-proposals',
   },
+  certificates: {
+    verify: (certificateNumber: string) =>
+      `/certificates/verify/${encodeURIComponent(certificateNumber)}`,
+  },
   hub: {
     overview: '/hub',
     spaces: '/hub/spaces',

@@ -55,6 +55,7 @@ export default function CorporatePage() {
   const [err, setErr] = useState<Record<string, string>>({});
   const [submitErr, setSubmitErr] = useState('');
   const [submitted, setSubmitted] = useState<ApiCorporateRequestResponse | null>(null);
+  const [showProposalForm, setShowProposalForm] = useState(false);
 
   const trainingAreas = useMemo(() => {
     if (apiCorp?.training_areas && apiCorp.training_areas.length > 0) {
@@ -129,8 +130,11 @@ export default function CorporatePage() {
           : [...prev.training_areas, preselectSlug],
       }));
     }
-    const el = document.getElementById('corp-proposal');
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
+    setShowProposalForm(true);
+    setTimeout(() => {
+      const el = document.getElementById('corp-proposal');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 40);
   };
 
   const renderCorpCta = (label = 'Request a proposal', cls = 'btn-accent') => (
@@ -496,10 +500,11 @@ export default function CorporatePage() {
         </div>
       </section>
 
-      <section className="sec" id="corp-proposal">
-        <div className="wrap" style={{ maxWidth: 860 }}>
-          <div className="panel">
-            {submitted ? (
+      {showProposalForm ? (
+        <section className="sec" id="corp-proposal">
+          <div className="wrap" style={{ maxWidth: 860 }}>
+            <div className="panel">
+              {submitted ? (
               <>
                 <div className="okmark">
                   <Icon name="check" />
@@ -571,11 +576,31 @@ export default function CorporatePage() {
               </>
             ) : (
               <>
-                <h2>Request a corporate training proposal</h2>
-                <p className="muted">
-                  Tell us about your organisation, team size and training goals. We’ll prepare a
-                  tailored programme and proposal.
-                </p>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <h2>Request a corporate training proposal</h2>
+                    <p className="muted">
+                      Tell us about your organisation, team size and training goals. We’ll prepare
+                      a tailored programme and proposal.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="iconbtn sm"
+                    aria-label="Hide proposal form"
+                    title="Hide proposal form"
+                    onClick={() => setShowProposalForm(false)}
+                  >
+                    <Icon name="x" />
+                  </button>
+                </div>
 
                 <div className="form">
                   <div className="f2">
@@ -808,9 +833,10 @@ export default function CorporatePage() {
                 </div>
               </>
             )}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       <section className="sec-sm">
         <div className="wrap">

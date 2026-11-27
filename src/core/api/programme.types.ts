@@ -103,3 +103,8 @@ export interface ApiProgrammeRecommendPayload {
   interest: string;
   technical_level: number;
 }
+
+export interface ApiProgrammeRecommendation extends ApiProgrammeSummary {
+  rank?: number;
+  score?: number;
+}

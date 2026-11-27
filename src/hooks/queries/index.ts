@@ -10,3 +10,5 @@ export * from './useTalentQuery';
 export * from './useBlogQuery';
 export * from './useCareerQuery';
 export * from './useHubQuery';
+export * from './useCertificateQuery';
+export * from './useContactQuery';
